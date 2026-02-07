@@ -1,0 +1,38 @@
+{
+  "name": "meteora-dlmm-copy-trader",
+  "version": "1.0.0",
+  "description": "Solana copy trading bot for Meteora DLMM positions",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "lint": "eslint . --ext .ts"
+  },
+  "keywords": [
+    "solana",
+    "meteora",
+    "dlmm",
+    "copy-trading",
+    "bot"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@solana/web3.js": "^1.95.4",
+    "bs58": "^5.0.0",
+    "dotenv": "^16.4.5",
+    "pino": "^9.2.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "pino-pretty": "^11.3.0",
+    "prettier": "^3.4.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}
