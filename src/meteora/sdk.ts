@@ -36,4 +36,19 @@ const sdk = require("@meteora-ag/dlmm") as DlmmCtor & Omit<SdkNamespace, "defaul
 
 export const DLMM: DlmmCtor = sdk;
 export const StrategyType = sdk.StrategyType;
-export const getPriceOfBinByBinId = sdk.getPriceOfBinByBinId;
+export type StrategyType = DlmmNs.StrategyType;
+
+/**
+ * Pure helper functions from the SDK.
+ *
+ * These need no connection, `Mint` or `Clock`, so the planner and the backtest
+ * can both call Meteora's real liquidity math offline.
+ */
+export const sdkFns = {
+  calculateSpotDistribution: sdk.calculateSpotDistribution,
+  calculateBidAskDistribution: sdk.calculateBidAskDistribution,
+  calculateNormalDistribution: sdk.calculateNormalDistribution,
+  autoFillYByStrategy: sdk.autoFillYByStrategy,
+  autoFillXByStrategy: sdk.autoFillXByStrategy,
+  getPriceOfBinByBinId: sdk.getPriceOfBinByBinId,
+} as const;
