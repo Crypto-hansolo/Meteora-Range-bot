@@ -15,12 +15,35 @@ Commands:
   status            Show the live session
   close             Unwind the LP position and the hedge
 
+Testing the strategy:
+  backtest [pool]   Replay real Hyperliquid price and funding history through the
+                    strategy and decompose the PnL. Needs a pool address to take
+                    the bin step, fee rate and fees/TVL from.
+  paper [pool]      Run the real decision loop against live prices with simulated
+                    fills. No keys needed, nothing is sent anywhere.
+
+Backtest options:
+  --days=N          Lookback window (default 30)
+  --interval=1h     Candle size: 1m 5m 15m 1h 4h 1d (default 1h)
+  --on-exit=MODE    recenter | hold | exit (default recenter)
+  --fee-tvl=0.02    Override the pool's fees/TVL, as a daily fraction
+  --no-intrabar     Use candle closes only instead of walking O/H/L/C
+  --csv=PATH        Also write the equity curve
+
 The strategy in one line: provide liquidity in a high fee/TVL Meteora DLMM pool,
 then short exactly the pool's token exposure on Hyperliquid so the position earns
 fees without taking a directional bet.
 
 Set DRY_RUN=false in .env to place real orders. It defaults to true.
 `;
+
+/** Read `--flag=value` from argv. */
+function flag(argv: string[], name: string): string | undefined {
+  const hit = argv.find((a) => a.startsWith(`--${name}=`));
+  return hit?.slice(name.length + 3);
+}
+
+const hasFlag = (argv: string[], name: string) => argv.includes(`--${name}`);
 
 async function main(): Promise<void> {
   const [command = "help", ...rest] = process.argv.slice(2);
@@ -100,6 +123,62 @@ async function main(): Promise<void> {
     case "close": {
       if (!config.dryRun) assertTradingCredentials();
       await engine.close();
+      return;
+    }
+
+    case "backtest": {
+      const { writeFile } = await import("node:fs/promises");
+      const backtest = await import("./backtest/index.js");
+
+      const interval = (flag(rest, "interval") ??
+        backtest.DEFAULT_BACKTEST_OPTIONS.interval) as "1m" | "5m" | "15m" | "1h" | "4h" | "1d";
+      const onExit = (flag(rest, "on-exit") ??
+        backtest.DEFAULT_BACKTEST_OPTIONS.outOfRangePolicy) as "hold" | "exit" | "recenter";
+      const feeTvl = flag(rest, "fee-tvl");
+
+      const result = await backtest.runBacktestFromLiveConfig({
+        ...backtest.DEFAULT_BACKTEST_OPTIONS,
+        ...(poolArg ? { poolAddress: poolArg } : {}),
+        days: Number(flag(rest, "days") ?? backtest.DEFAULT_BACKTEST_OPTIONS.days),
+        interval,
+        outOfRangePolicy: onExit,
+        intrabar: !hasFlag(rest, "no-intrabar"),
+        ...(feeTvl !== undefined ? { feeTvlRatio24h: Number(feeTvl) } : {}),
+      });
+
+      console.log(backtest.formatBacktestReport(result));
+
+      const csvPath = flag(rest, "csv");
+      if (csvPath) {
+        await writeFile(csvPath, backtest.equityCurveCsv(result), "utf-8");
+        console.log(`\nEquity curve written to ${csvPath}`);
+      }
+      return;
+    }
+
+    case "paper": {
+      const { createPaperEngine, paperStatePath } = await import("./paper/index.js");
+      const { engine: paperEngine, hedger } = await createPaperEngine({
+        ...(poolArg ? { poolAddress: poolArg } : {}),
+      });
+
+      console.log(
+        `Paper trading: live prices, simulated fills. Nothing is sent to Solana or\n` +
+          `Hyperliquid, and no keys are used. State: ${paperStatePath()}\n`,
+      );
+
+      try {
+        await paperEngine.run(poolArg);
+      } finally {
+        const s = hedger.stats();
+        console.log(`\nPaper hedge summary`);
+        console.log(`  fills          ${s.fills}`);
+        console.log(`  realised PnL   $${s.realizedPnlUsd.toFixed(2)}`);
+        console.log(`  funding        $${s.fundingUsd.toFixed(2)}`);
+        console.log(`  taker fees     -$${s.feesPaidUsd.toFixed(2)}`);
+        console.log(`  slippage       -$${s.slippageUsd.toFixed(2)}`);
+        if (s.liquidations) console.log(`  liquidations   ${s.liquidations}  !!`);
+      }
       return;
     }
 

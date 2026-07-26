@@ -179,6 +179,9 @@ npm run plan -- <pool-address>      # kompletter Plan, ohne zu traden
 npm run run  -- <pool-address>      # öffnen + Hedge nachführen
 npm run status                      # laufende Session
 npm run close                       # alles auflösen
+
+npm run backtest -- <pool>          # echte Historie durchspielen
+npm run paper -- <pool>             # Live-Preise, simulierte Fills
 ```
 
 `scan` ohne Argument, dann `plan`, dann `run` ist der normale Weg. `run` ohne
@@ -202,7 +205,99 @@ Beispiel-Konstellation, Zeile 2 ist zur Illustration des Layouts):
 
 ---
 
-## 5. Ablauf & Reihenfolge
+## 5. Strategie testen, bevor Geld fließt
+
+Zwei Werkzeuge, die unterschiedliche Fragen beantworten.
+
+### `npm run backtest -- <pool-address>`
+
+Spielt **echte** Hyperliquid-Preis- und Funding-Historie durch die Strategie und
+zerlegt das Ergebnis. Die Rebalancing-Entscheidungen kommen aus denselben
+Funktionen wie im Live-Betrieb (`decideRebalance`, `planHedgeLeg`) — gemessen
+wird also die Strategie wie implementiert, nicht ein zweites Modell davon.
+
+```bash
+npm run backtest -- <pool> --days=60 --interval=1h --on-exit=recenter
+npm run backtest -- <pool> --fee-tvl=0.015 --csv=equity.csv
+```
+
+Was echt ist und was angenommen:
+
+| Eingabe | Quelle |
+|---------|--------|
+| Preispfad | Hyperliquid-Candles (OHLC, intrabar durchlaufen) |
+| Funding | Hyperliquid-Funding-Historie, echt gezahlte Raten |
+| Bin-Step, Pool-Fee, Fees/TVL | Meteora-API für den angegebenen Pool |
+| LP-Verhalten | Bin-Walk mit Meteoras eigener Verteilungsmathematik |
+| Taker-Fees, Slippage, Gas | Parameter |
+| **Fee-Einnahmen** | **die einzige echte Annahme** — Fees/TVL des Pools |
+
+Der Report trennt das explizit. Die Fee-Annahme wird zusätzlich gegen eine harte
+Untergrenze geprüft: das Arbitrage-Volumen, das der Preispfad *zwingend*
+erzeugt hat. Steht die Annahme bei 2,5x davon, unterstellst du 2,5x
+Noise-Flow obendrauf — prüf das gegen das echte Volumen des Pools.
+
+### `npm run paper -- <pool-address>`
+
+Live-Preise, simulierte Ausführung. Läuft den **echten** Entscheidungs-Loop
+(`tick()`, dieselben Exit-Bedingungen) gegen simulierte Fills. Braucht keine
+Keys, schreibt in einen eigenen State (`data/state.paper.json`), sendet nichts.
+
+Ein Paper-Modus, der den Loop nachbaut, würde nur beweisen, dass der Nachbau
+funktioniert. Deshalb sind LP- und Perp-Venue hinter schmalen Interfaces
+([`src/strategy/venues.ts`](src/strategy/venues.ts)) austauschbar.
+
+### Was die Backtests ergeben haben
+
+Drei Befunde, die den Bot verändert haben:
+
+**1. Der Gamma-Kostenblock frisst die Fees.** Bei ~80% annualisierter
+Volatilität, ±5%-Range und 5%-Rebalance-Schwelle braucht die Position rund
+**4% Fees/TVL pro Tag**, nur um break-even zu laufen. Sensitivität aus
+simulierten GBM-Pfaden (30 Tage, 1000 $ LP-Kapital, 30 bps Slippage):
+
+| Vola | ±3% Range | ±5% Range | ±10% Range |
+|------|-----------|-----------|------------|
+| 40%  | 2,52%/Tag | 1,38%/Tag | 0,80%/Tag |
+| 60%  | 4,09%/Tag | 2,88%/Tag | 2,00%/Tag |
+| 80%  | 5,17%/Tag | 4,11%/Tag | 3,22%/Tag |
+| 120% | 6,29%/Tag | 5,57%/Tag | 4,60%/Tag |
+
+Lies das als: **enge Ranges und hohe Vola sind die Feinde.** Eine engere Range
+verdient mehr Fees pro Dollar, kostet aber überproportional mehr Rebalancing.
+Der Hedge-Umsatz erreicht das 95-fache des LP-Kapitals im Monat — bei 30 bps
+Slippage sind das allein ~29% des LP-Kapitals.
+
+**2. Die Rebalance-Schwelle ist nicht das, was den Hedge-Fehler bestimmt.**
+Zwischen 1% und 10% Schwelle war der maximale ungehedgte Betrag *identisch*.
+Der Bot kann nicht schneller reagieren, als er beobachtet — bei 1%-Preissprüngen
+zwischen zwei Samples ist das Delta längst weggelaufen, bevor irgendeine
+Schwelle geprüft wird. **`POLL_INTERVAL_MS` ist der wichtigere Regler.**
+
+**3. Der Hyperliquid-Account blutet in Trends aus.** Das war der teuerste Fund.
+In einer anhaltenden Rally verliert der Short auf Hyperliquid, während der
+passende Gewinn in der LP-Position auf Solana anfällt. Der Perp-Account leert
+sich, obwohl die Gesamtposition gesund ist — und irgendwann werden die
+Hedge-Orders mangels Margin abgelehnt. Der Backtest hat das anfangs still
+geschluckt (961 abgelehnte Orders, bis zu 853 $ ungehedgtes Delta).
+
+Konsequenzen im Code:
+- Der Backtest zählt fehlgeschlagene Hedges und setzt bei >0 ein
+  **`!! RESULT NOT TRUSTWORTHY !!`** über den Report — eine Zahl, die aus einem
+  ungehedgten Zeitraum stammt, ist eine Richtungswette, keine Strategie.
+- Der Live-Bot behandelt eine nicht ausgeführte Hedge-Order jetzt als
+  Risiko-Ereignis (`TickReport.hedgeDegraded`, Error-Log mit dem exponierten
+  Betrag) statt als beiläufige Warnung.
+- Der Backtest modelliert Margin-Transfers von der LP- zur Perp-Seite, weil
+  genau das im echten Betrieb nötig ist.
+
+**Für den Betrieb heißt das:** plane Kapital ein, um Margin nachzuschieben, und
+überwache das freie Collateral auf Hyperliquid. Der Bot transferiert **nicht**
+selbst zwischen den Venues.
+
+---
+
+## 6. Ablauf & Reihenfolge
 
 **Öffnen** — Hedge zuerst, LP danach:
 
@@ -235,7 +330,7 @@ Bestätigung ungehedgt.
 
 ---
 
-## 6. Sicherheits-Entscheidungen
+## 7. Sicherheits-Entscheidungen
 
 **Mint-Allowlist statt Symbol-Namen.** Das `name`-Feld der Meteora-API
 ("SOL-USDC") ist angreifbar: jeder kann einen Token namens `SOL` deployen und einen
@@ -265,7 +360,7 @@ gewechselt hat.
 
 ---
 
-## 7. Grenzen — bitte lesen
+## 8. Grenzen — bitte lesen
 
 **Der Bot swappt nicht.** Er zahlt ein, was das Wallet schon hält. Für eine
 ±5%-SOL/USDC-Position brauchst du also ~50% SOL und ~50% USDC vorab. Fehlt etwas,
@@ -283,16 +378,26 @@ Jupiter-Swap-Schritt wäre die naheliegende Erweiterung.
   engere Schwelle hedgt genauer und kostet mehr.
 - *Ausführungslücken*: Zwischen den beiden Beinen existiert ein kurzes Fenster.
 
+**Der Bot transferiert nicht zwischen den Venues.** Siehe Befund 3 oben: in
+Trends muss Margin von der LP- zur Perp-Seite nachgeschoben werden. Der Bot
+alarmiert, wenn ein Hedge nicht durchgeht, macht den Transfer aber nicht selbst.
+
+**Die Backtest-Zahlen sind Modell, nicht Historie.** Der Preispfad und das
+Funding sind echt, die Fee-Einnahmen eine Annahme, und die Ausführung unterstellt,
+dass ein IOC bei Mark ± Slippage gefüllt hätte. `HEDGE_SLIPPAGE_BPS` ist die
+IOC-Aggressivität, also eine *Obergrenze* — reale Fills sind oft besser, die
+Backtest-Kosten damit eher konservativ.
+
 **Nicht live gegen die Mainnet-APIs getestet.** Die Entwicklungsumgebung hatte keinen
 Netzwerkzugang zu `dlmm-api.meteora.ag` und `api.hyperliquid.xyz`. Alle SDK-Aufrufe
 sind gegen die installierten Typdefinitionen von `@meteora-ag/dlmm@1.9.14` und
-`@nktkas/hyperliquid@0.33.2` geschrieben und typgeprüft, und die Selektions-/
-Planungs-/Sizing-Logik ist offline durchgetestet (93 Tests) — aber **fahre zuerst
-`DRY_RUN=true`**, dann einen kleinen Betrag, bevor du Kapital drauflegst.
+`@nktkas/hyperliquid@0.33.2` geschrieben und typgeprüft, und die gesamte Logik ist
+offline durchgetestet (202 Tests) — aber **fahre zuerst `npm run paper`**, dann
+`DRY_RUN=true`, dann einen kleinen Betrag.
 
 ---
 
-## 8. Projektstruktur
+## 9. Projektstruktur
 
 ```
 src/
@@ -314,8 +419,17 @@ src/
     planner.ts           Pool + Markt → vollständiger Plan
     engine.ts            Session-Ablauf: open / tick / close
   state/store.ts         Atomar geschriebener JSON-State
+  sim/
+    lpPosition.ts        DLMM-Bin-Walk-Simulator
+    broker.ts            Simuliertes Perp-Konto: Fills, Funding, Liquidation
+    distribution.ts      Meteoras echte Verteilungsmathematik (offline nutzbar)
+  backtest/
+    data.ts              Hyperliquid-Candles und Funding-Historie
+    runner.ts            Replay-Loop mit den Produktions-Entscheidungen
+    report.ts            PnL-Zerlegung
+  paper/venues.ts        Live-Daten + simulierte Ausführung
   util/                  HTTP mit Retries, Balance-Prüfung
-test/                    93 Offline-Tests
+test/                    202 Offline-Tests
 ```
 
 ### Zur `meteora/sdk.ts`-Datei
@@ -330,17 +444,19 @@ test/                    93 Offline-Tests
 
 ---
 
-## 9. Entwicklung
+## 10. Entwicklung
 
 ```bash
-npm test          # 93 Offline-Tests, kein Netzwerk nötig
+npm test          # 202 Offline-Tests, kein Netzwerk nötig
 npm run typecheck # tsc --noEmit
 npm run build     # -> dist/
 ```
 
-Die Tests decken die Mathematik (Delta, Liquidation, Leverage-Solve, Rebalancing-
-Vorzeichen), die Bin-Geometrie und den kompletten Selektions- und Planungspfad mit
-synthetischen Pool-Rows und gestubbten Märkten ab.
+Abgedeckt: die Mathematik (Delta, Liquidation, Leverage-Solve, Rebalancing-
+Vorzeichen), die Bin-Geometrie, der komplette Selektions- und Planungspfad, die
+Simulatoren, der Backtest-Runner — und der **echte Engine-Loop** end-to-end mit
+gestubbten Venues (`test/engine.test.ts`), inklusive der Fehlerpfade: Hedge
+scheitert, LP-Open scheitert, Position verschwunden, Collateral leer.
 
 ## Lizenz
 

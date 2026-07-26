@@ -9,6 +9,13 @@ import { StateStore, type Session } from "../state/store.js";
 import { hlSizeMultiplier, type PoolTokens } from "../tokens.js";
 import { checkBalances } from "../util/balances.js";
 import { sleep } from "../util/http.js";
+import type {
+  BalanceChecker,
+  HedgeVenue,
+  LpVenue,
+  LpVenueFactory,
+  PoolSource,
+} from "./venues.js";
 import {
   planPosition,
   priceTokensUsd,
@@ -28,11 +35,30 @@ export interface TickReport {
     currentSzi: number;
     driftUsd: number;
     rebalanced: boolean;
+    /** The hedge was needed but did not go through; delta is exposed. */
+    hedgeFailed: boolean;
     liquidationPx: number | null;
     effectiveLeverage: number;
   }[];
   actions: string[];
   exitReason: string | null;
+  /** True when any leg failed to hedge this tick. */
+  hedgeDegraded: boolean;
+}
+
+export interface EngineDeps {
+  /** Perp venue. Defaults to the live Hyperliquid client. */
+  hedger?: HedgeVenue;
+  /** Opens a pool handle. Defaults to the on-chain DLMM pool. */
+  openPool?: LpVenueFactory;
+  /** Wallet funding check. Defaults to reading real balances. */
+  checkBalances?: BalanceChecker;
+  /** Label shown in logs, e.g. "paper". */
+  mode?: string;
+  /** Overrides STATE_PATH so paper runs cannot collide with a live session. */
+  statePath?: string;
+  /** Pool metrics provider. Defaults to the live Meteora API. */
+  poolSource?: PoolSource;
 }
 
 /**
@@ -40,9 +66,25 @@ export interface TickReport {
  * hedge tracking the LP delta, and unwind on the configured exit conditions.
  */
 export class Engine {
-  private readonly store = new StateStore(config.statePath);
-  private readonly hedger = new HyperliquidHedger();
-  private readonly api = new MeteoraApi();
+  private readonly store: StateStore;
+  private readonly api: PoolSource;
+  private readonly hedger: HedgeVenue;
+  private readonly openPool: LpVenueFactory;
+  private readonly checkBalances: BalanceChecker;
+  readonly mode: string;
+
+  /**
+   * Both venues are injectable so paper trading can drive the exact same loop
+   * with simulated execution instead of a parallel implementation.
+   */
+  constructor(deps: EngineDeps = {}) {
+    this.store = new StateStore(deps.statePath ?? config.statePath);
+    this.api = deps.poolSource ?? new MeteoraApi();
+    this.hedger = deps.hedger ?? new HyperliquidHedger();
+    this.openPool = deps.openPool ?? ((address) => DlmmPool.load(address));
+    this.checkBalances = deps.checkBalances ?? checkBalances;
+    this.mode = deps.mode ?? "live";
+  }
 
   // ------------------------------------------------------------------- scan
 
@@ -110,7 +152,7 @@ export class Engine {
     }
 
     const plan = await this.plan(poolAddress);
-    const pool = await DlmmPool.load(plan.pool.address);
+    const pool = await this.openPool(plan.pool.address);
     await pool.refresh();
 
     // Re-plan against the live active bin so the bin ids are absolute and the
@@ -127,7 +169,7 @@ export class Engine {
 
     logSummary(finalPlan);
 
-    const balances = await checkBalances([
+    const balances = await this.checkBalances([
       {
         mint: pool.mintX,
         symbol: finalPlan.tokens.x.symbol,
@@ -247,7 +289,7 @@ export class Engine {
     const session = state.session;
     if (!session) throw new Error("No open session");
 
-    const pool = await DlmmPool.load(session.poolAddress);
+    const pool = await this.openPool(session.poolAddress);
     const snapshot = await pool.snapshot(session.positionPubkey);
 
     if (!snapshot) {
@@ -298,6 +340,7 @@ export class Engine {
       });
 
       let rebalanced = false;
+      let hedgeFailed = false;
       if (decision.shouldRebalance && cooldownOk) {
         // Reducing an existing short is reduce-only so a stale delta reading can
         // never accidentally flip the hedge into a long.
@@ -307,9 +350,27 @@ export class Engine {
           size: decision.deltaSize,
           reduceOnly,
         });
-        rebalanced = fill !== null;
+        rebalanced = fill !== null && fill.filledSize > 0;
         rebalancedAny ||= rebalanced;
-        actions.push(`${symbol}: re-hedged (${decision.reason})`);
+
+        if (rebalanced) {
+          actions.push(`${symbol}: re-hedged (${decision.reason})`);
+        } else {
+          // The hedge was needed and did not happen. Backtesting showed this is
+          // the failure that matters most: a position that quietly stops being
+          // delta neutral looks fine in the logs while it turns into a
+          // leveraged directional bet. Usually it means the Hyperliquid account
+          // is out of collateral to post as margin.
+          hedgeFailed = true;
+          actions.push(
+            `${symbol}: HEDGE FAILED — $${decision.deltaNotionalUsd.toFixed(2)} of delta ` +
+              `is unhedged (check collateral on Hyperliquid)`,
+          );
+          logger.error(
+            { symbol, unhedgedUsd: decision.deltaNotionalUsd, size: decision.deltaSize },
+            "hedge order did not fill; the position is directionally exposed",
+          );
+        }
       } else if (decision.shouldRebalance) {
         actions.push(`${symbol}: re-hedge due but cooling down`);
       }
@@ -342,6 +403,7 @@ export class Engine {
         currentSzi,
         driftUsd: decision.deltaNotionalUsd,
         rebalanced,
+        hedgeFailed,
         liquidationPx: position?.liquidationPx ?? null,
         effectiveLeverage: effLev,
       });
@@ -390,6 +452,7 @@ export class Engine {
       legs,
       actions,
       exitReason,
+      hedgeDegraded: legs.some((l) => l.hedgeFailed),
     };
   }
 
@@ -417,7 +480,7 @@ export class Engine {
     return targets;
   }
 
-  private async poolTokens(session: Session, pool: DlmmPool): Promise<PoolTokens> {
+  private async poolTokens(session: Session, pool: LpVenue): Promise<PoolTokens> {
     const { classifyPool } = await import("../tokens.js");
     const eligibility = classifyPool(pool.mintX, pool.mintY);
     if (!eligibility.eligible) {
@@ -448,7 +511,7 @@ export class Engine {
 
     let lpClosed = false;
     try {
-      const pool = await DlmmPool.load(session.poolAddress);
+      const pool = await this.openPool(session.poolAddress);
       const sigs = await pool.closePosition(session.positionPubkey);
       logger.info({ transactions: sigs.length }, "LP position closed");
       lpClosed = true;
@@ -536,7 +599,7 @@ export class Engine {
     if (!state.session) return { session: null, report: null };
 
     // A status read must not trade, so mirror the tick's reads without writes.
-    const pool = await DlmmPool.load(state.session.poolAddress);
+    const pool = await this.openPool(state.session.poolAddress);
     const snapshot = await pool.snapshot(state.session.positionPubkey);
     if (!snapshot) return { session: state.session, report: null };
 
@@ -560,6 +623,7 @@ export class Engine {
         currentSzi: szi,
         driftUsd: Math.abs(szi + targetUnits) * px,
         rebalanced: false,
+        hedgeFailed: false,
         liquidationPx: position?.liquidationPx ?? null,
         effectiveLeverage: effectiveLeverage(Math.abs(szi) * px, position?.marginUsedUsd ?? 0),
       };
@@ -579,6 +643,7 @@ export class Engine {
         legs,
         actions: [],
         exitReason: null,
+        hedgeDegraded: false,
       },
     };
   }
