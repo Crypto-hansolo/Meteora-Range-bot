@@ -1,4 +1,6 @@
 node_modules/
 dist/
 .env
-/data/state.json
+.env.local
+data/
+*.log
