@@ -356,6 +356,24 @@ describe("Engine.tick", () => {
     assert.ok(hedger.broker.sizeOf("SOL") < before, "a selloff must grow the short");
   });
 
+  it("reports the hedge size left behind, not the one it walked in on", async () => {
+    const market = new Market();
+    const { engine, hedger } = makeEngine(market);
+    await engine.open(POOL.address);
+
+    market.price = 208;
+    const report = await engine.tick();
+
+    // The reported size must match reality after the tick, otherwise the logs
+    // make a correctly tracking hedge look permanently behind.
+    assert.equal(report.legs[0]!.currentSzi, hedger.broker.sizeOf("SOL"));
+    assert.equal(report.legs[0]!.rebalanced, true);
+    assert.ok(
+      Math.abs(report.legs[0]!.currentSzi + report.legs[0]!.targetShort) < 1e-6,
+      "after rebalancing, the hedge should sit on the target",
+    );
+  });
+
   it("stays put when the drift is below the threshold", async () => {
     const market = new Market();
     const { engine, hedger } = makeEngine(market);

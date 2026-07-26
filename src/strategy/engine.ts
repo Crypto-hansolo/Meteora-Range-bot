@@ -32,7 +32,12 @@ export interface TickReport {
   legs: {
     symbol: string;
     targetShort: number;
+    /**
+     * The hedge position *after* this tick's rebalance, so the number reflects
+     * the state the bot left behind rather than the one it walked in on.
+     */
     currentSzi: number;
+    /** Drift that was measured at the start of the tick, before correcting it. */
     driftUsd: number;
     rebalanced: boolean;
     /** The hedge was needed but did not go through; delta is exposed. */
@@ -308,18 +313,25 @@ export class Engine {
 
     const lpValueUsd =
       snapshot.xUnits * prices.priceXUsd + snapshot.yUnits * prices.priceYUsd;
-    const equityUsd = lpValueUsd + account.accountValueUsd;
-    const drawdownPct =
-      session.startEquityUsd > 0
-        ? ((session.startEquityUsd - equityUsd) / session.startEquityUsd) * 100
-        : 0;
 
     const actions: string[] = [];
     const targets = this.deltaTargets(tokens, snapshot);
     const cooldownOk =
       Date.now() - (session.lastRebalanceAt ?? 0) >= config.loop.rebalanceCooldownMs;
 
-    const legs: TickReport["legs"] = [];
+    // Rebalance first, then report. Reporting margin and liquidation prices
+    // requires account state fetched *after* the trades — mixing a post-trade
+    // position size with pre-trade margin produces nonsense leverage numbers.
+    interface LegWork {
+      symbol: string;
+      targetUnits: number;
+      markPx: number;
+      driftUsd: number;
+      rebalanced: boolean;
+      hedgeFailed: boolean;
+    }
+
+    const work: LegWork[] = [];
     let rebalancedAny = false;
 
     for (const [symbol, targetUnits] of targets) {
@@ -375,7 +387,31 @@ export class Engine {
         actions.push(`${symbol}: re-hedge due but cooling down`);
       }
 
-      const notional = Math.abs(currentSzi) * market.markPx;
+      work.push({
+        symbol,
+        targetUnits,
+        markPx: market.markPx,
+        driftUsd: decision.deltaNotionalUsd,
+        rebalanced,
+        hedgeFailed,
+      });
+    }
+
+    // Re-read the account so margin, liquidation prices and leverage describe
+    // the state this tick actually left behind. Only needed when we traded.
+    const settled = rebalancedAny ? await this.hedger.getAccountState() : account;
+
+    const equityUsd = lpValueUsd + settled.accountValueUsd;
+    const drawdownPct =
+      session.startEquityUsd > 0
+        ? ((session.startEquityUsd - equityUsd) / session.startEquityUsd) * 100
+        : 0;
+
+    const legs: TickReport["legs"] = [];
+    for (const item of work) {
+      const position = settled.positions.get(item.symbol);
+      const szi = position?.szi ?? 0;
+      const notional = Math.abs(szi) * item.markPx;
       const margin = position?.marginUsedUsd ?? 0;
       const effLev = effectiveLeverage(notional, margin);
 
@@ -389,21 +425,21 @@ export class Engine {
         const targetMargin = notional / topupThreshold;
         const topup = targetMargin - margin;
         if (topup > 1) {
-          await this.hedger.adjustIsolatedMargin(symbol, topup);
+          await this.hedger.adjustIsolatedMargin(item.symbol, topup);
           actions.push(
-            `${symbol}: topped up isolated margin by $${topup.toFixed(2)} ` +
+            `${item.symbol}: topped up isolated margin by $${topup.toFixed(2)} ` +
               `(effective leverage ${effLev.toFixed(2)}x > ${topupThreshold}x)`,
           );
         }
       }
 
       legs.push({
-        symbol,
-        targetShort: targetUnits,
-        currentSzi,
-        driftUsd: decision.deltaNotionalUsd,
-        rebalanced,
-        hedgeFailed,
+        symbol: item.symbol,
+        targetShort: item.targetUnits,
+        currentSzi: szi,
+        driftUsd: item.driftUsd,
+        rebalanced: item.rebalanced,
+        hedgeFailed: item.hedgeFailed,
         liquidationPx: position?.liquidationPx ?? null,
         effectiveLeverage: effLev,
       });
@@ -446,7 +482,7 @@ export class Engine {
     return {
       inRange: snapshot.inRange,
       lpValueUsd,
-      hedgeAccountValueUsd: account.accountValueUsd,
+      hedgeAccountValueUsd: settled.accountValueUsd,
       equityUsd,
       drawdownPct,
       legs,
