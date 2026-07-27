@@ -153,6 +153,8 @@ komplett aufessen. Deshalb steht Funding in `scan` als eigene Spalte.
 
 ## 3. Setup
 
+**Beim ersten Mal** — holt den Quellcode von GitHub auf die Festplatte:
+
 ```bash
 git clone https://github.com/Crypto-hansolo/Meteora-Range-bot
 cd Meteora-Range-bot
@@ -160,7 +162,25 @@ npm install
 cp .env.example .env
 ```
 
-Node 20 oder neuer.
+**Danach immer** — der Ordner ist schon da, es fehlen nur die neuen Commits:
+
+```bash
+cd Meteora-Range-bot
+git pull
+npm install     # nur nötig, wenn neue Abhängigkeiten dazugekommen sind
+```
+
+`git clone` brauchst du nie wieder, außer du löschst den Ordner.
+
+Node 20 oder neuer. Wer nicht gern im Terminal arbeitet: GitHub Desktop macht
+Klonen und Aktualisieren per Knopfdruck, der Rest läuft trotzdem über die
+Kommandozeile.
+
+> **Kurz zum Unterschied:** `git clone` holt den *Quellcode* aus dem Repo.
+> `npm install` holt die *Bibliotheken*, die dieser Code braucht (Solana-SDK,
+> Hyperliquid-SDK und so weiter) nach `node_modules/`. Ein
+> `npm install meteora-range-bot` gibt es nicht — das Projekt ist nicht als
+> Paket in der npm-Registry veröffentlicht, sondern Quellcode in deinem Repo.
 
 ### Welche Keys wofür?
 
