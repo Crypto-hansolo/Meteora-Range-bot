@@ -253,7 +253,7 @@ irgendetwas Echtes passiert.
 ### Erste Schritte
 
 ```bash
-npm test                            # 232 Tests, kein Netz nötig
+npm test                            # 232 Tests, kein Netz, keine Keys
 npm run scan                        # welche Pools gibt es? (ohne Keys)
 npm run backtest -- <pool-address>  # echte 90-Tage-Historie des Kandidaten
 npm run paper -- <pool-address>     # Live-Preise, simulierte Fills
@@ -262,6 +262,9 @@ npm run paper -- <pool-address>     # Live-Preise, simulierte Fills
 `scan` liefert dir die Pool-Adressen für die anderen Befehle. Läuft der Scan ins
 Leere, sind die Filter zu streng — `MIN_FEE_TVL_RATIO_24H` und `MIN_TVL_USD`
 sind die üblichen Verdächtigen.
+
+Ohne Pool-Adresse nimmt `paper` automatisch den besten Scan-Treffer und liest
+die Fee-Rate direkt von der Chain.
 
 Beim Paper-Lauf: der Bot pollt alle 30 s (`POLL_INTERVAL_MS`). Bei ruhigem Markt
 siehst du minutenlang nur „drift unter Schwelle". Wenn du schneller etwas sehen

@@ -194,9 +194,20 @@ export class PaperPool implements LpVenue {
     private readonly feeRate: number,
   ) {}
 
-  static async load(poolAddress: string, feeRate: number): Promise<PaperPool> {
+  /**
+   * `feeRate` is optional: when omitted it is read from the pool itself, which
+   * is what `npm run paper` without an explicit address needs — there is no
+   * pool to look up beforehand, and defaulting silently would simulate the
+   * wrong fee income.
+   */
+  static async load(poolAddress: string, feeRate?: number): Promise<PaperPool> {
     const pool = await DlmmPool.load(poolAddress);
-    return new PaperPool(pool, feeRate);
+    const rate = feeRate ?? pool.feeInfo().baseFeePct / 100;
+    logger.info(
+      { pool: poolAddress, feeRate: `${(rate * 100).toFixed(3)}%`, source: feeRate === undefined ? "on-chain" : "api" },
+      "paper pool fee rate",
+    );
+    return new PaperPool(pool, rate);
   }
 
   get mintX(): string {
