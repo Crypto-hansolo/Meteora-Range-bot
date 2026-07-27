@@ -16,6 +16,7 @@
     "backtest": "tsx src/index.ts backtest",
     "paper": "tsx src/index.ts paper",
     "simulate": "tsx src/index.ts simulate",
+    "scenario": "tsx src/index.ts scenario",
     "test": "node --test --import tsx \"test/*.test.ts\"",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
