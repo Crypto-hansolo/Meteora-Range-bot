@@ -183,6 +183,7 @@ npm run close                       # alles auflösen
 npm run backtest -- <pool>          # echte Historie durchspielen
 npm run paper -- <pool>             # Live-Preise, simulierte Fills
 npm run simulate -- <pool>          # Monte Carlo über viele Preispfade
+npm run scenario -- <pool>          # "N Tage in Range, X% Fee-APR — was passiert?"
 ```
 
 `scan` ohne Argument, dann `plan`, dann `run` ist der normale Weg. `run` ohne
@@ -332,6 +333,78 @@ Konsequenzen:
   echten Betrieb nötig ist.
 - Der Live-Bot behandelt eine nicht ausgeführte Hedge-Order als Risiko-Ereignis
   (`TickReport.hedgeDegraded`, Error-Log mit dem exponierten Betrag).
+
+### "Der Kursgewinn deckt doch den Short-Verlust" — die Rechnung dazu
+
+Eine naheliegende Überlegung: Die LP-Position verdient täglich Fees; steigt der
+Preis, macht sie *zusätzlich* einen Kursgewinn, der den Short-Verlust teilweise
+deckt; bei genug Fees bleibt unterm Strich etwas übrig.
+
+Die erste Hälfte stimmt, die zweite nicht — und zwar an einer Stelle, die alles
+entscheidet. Der Hedge ist **auf das Delta dimensioniert**. LP-Kursgewinn und
+Short-Verlust decken sich deshalb nicht *teilweise*, sondern **fast exakt, per
+Konstruktion, in beide Richtungen**. Wäre der LP-Gewinn größer als der
+Short-Verlust, wärst du nicht delta-neutral, sondern netto long.
+
+`npm run scenario` macht das sichtbar. 14 Tage, ±13% Range, 50% Fee-APR,
+10.000 $, glatter Preisverlauf ohne Schwankung:
+
+```
+Preis am Ende         LP Preis      Short    = Summe       Fees     Kosten      Netto
+Range-Top (+13%)      +$309.30   -$321.94    -$12.64   +$195.79     -$8.52   +$182.15
+unverändert (0%)        +$0.00    +$13.09    +$13.09   +$191.78     -$8.27   +$203.87
+Range-Boden (-13%)   -$1014.07  +$1008.85     -$5.21   +$161.40    -$15.11   +$155.19
+```
+
+Die Spalte **`= Summe`** ist der Punkt: ±13 $ auf 10.000 $ Kapital. Der Preis
+hebt sich raus, egal wohin er läuft. **Der gesamte Ertrag sind die Fees.**
+
+Und der LP-Kursgewinn ist kleiner, als die Intuition sagt. Bei +13%:
+
+| | LP-Wert | einfach Halten | Differenz |
+|---|---------|----------------|-----------|
+| +13% | 10.309 $ | 10.650 $ | -341 $ |
+
+Halten würde +6,5% bringen (halbes Kapital × 13%), die LP-Position bringt +3,1%.
+Also nicht „die Hälfte des Kursgewinns", sondern **etwa die Hälfte davon nochmal**
+— weil die Position auf dem Weg nach oben laufend verkauft. Genau deshalb ist
+auch der nötige Short kleiner als die volle Position, und genau deshalb geht die
+Rechnung auf.
+
+**Der Preis der Neutralität** ist der Rest: Der LP verkauft in die Rally hinein
+zu Bin-Preisen, die der Markt schon passiert hat, und der Hedge kauft dieselbe
+Position zum Marktpreis zurück. Diese Lücke, bei jeder Bin-Überquerung bezahlt,
+ist Loss-versus-Rebalancing. Sie ist immer negativ.
+
+### Welchen Fee-APR brauchst du also?
+
+Break-Even-Fee-APR, 300 Pfade je Zelle, 3 bps Slippage, Recenter aktiv:
+
+| Vola | ±5% Range | ±10% | ±15% | ±25% |
+|------|-----------|------|------|------|
+| BTC 42%  | 208% | 88% | **52%** | **27%** |
+| ETH 55%  | 331% | 167% | 104% | **56%** |
+| SOL 80%  | 527% | 330% | 235% | 135% |
+| JUP 110% | 660% | 502% | 413% | 267% |
+
+*(90 Tage Haltedauer; bei 14 Tagen fast identisch, die Fixkosten amortisieren
+nur etwas schlechter.)*
+
+Damit wird deine 40–50%-APR-Zahl für BTC/USDC einordbar:
+
+- **±5% Range: chancenlos.** Du bräuchtest 208% APR.
+- **±15% Range: knapp machbar.** 52% nötig, 40–50% verfügbar — also etwa
+  Nullsummenspiel.
+- **±25% Range: geht auf.** 27% nötig, deutlich weniger als 40–50%.
+
+Die Zeit in Range ist bei aktivem Recentering übrigens fast überall >96%, auch
+bei ±5%. Der Engpass ist also nicht das Herausfallen, sondern das Rebalancing
+zwischendurch.
+
+**Praktisch heißt das:** weite Ranges auf ruhigen Assets. Eine ±5%-Range auf BTC
+mit 50% APR verliert; eine ±25%-Range auf demselben Pool verdient. Das ist das
+Gegenteil dessen, was man als reiner LP täte — dort will man eng sein, um die
+Fee-Dichte zu maximieren. Mit Hedge kippt die Rechnung.
 
 ### Welchen Pool nehmen?
 
@@ -535,6 +608,7 @@ src/
     report.ts            PnL-Zerlegung
     paths.ts             Synthetische Pfade: GARCH-Clustering, Fat Tails
     montecarlo.ts        Verteilung über viele Pfade statt eines Ergebnisses
+    scenario.ts          Was-wäre-wenn: Aufhebung und Kosten nebeneinander
   paper/venues.ts        Live-Daten + simulierte Ausführung
   util/                  HTTP mit Retries, Balance-Prüfung
 test/                    221 Offline-Tests

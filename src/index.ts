@@ -23,6 +23,8 @@ Testing the strategy:
                     fills. No keys needed, nothing is sent anywhere.
   simulate [pool]   Monte Carlo: run the strategy over many synthetic price paths
                     and report the distribution of outcomes. Works offline.
+  scenario [pool]   "N days in range, X% fee APR, price ends at the range edge —
+                    what happens?" Shows the PnL decomposition. Works offline.
 
 Backtest options:
   --days=N          Lookback window (default 30)
@@ -40,6 +42,12 @@ Simulate options (all of the above apply too):
   --seed=1          Change it to get a different set of paths
   --slippage=3      Expected fill slippage in bps. Not HEDGE_SLIPPAGE_BPS, which
                     bounds the IOC limit rather than describing a typical fill.
+
+Scenario options:
+  --fee-apr=50      Fee yield the way pools quote it (default 50)
+  --days=14         Days assumed in range (default 14)
+  --capital=10000   LP capital (default LP_CAPITAL_USD)
+  --vol=0.42        Annualised volatility for the noisy comparison
 
 The strategy in one line: provide liquidity in a high fee/TVL Meteora DLMM pool,
 then short exactly the pool's token exposure on Hyperliquid so the position earns
@@ -216,6 +224,38 @@ async function main(): Promise<void> {
       });
 
       console.log(formatMonteCarloReport(stats));
+      return;
+    }
+
+    case "scenario": {
+      const backtest = await import("./backtest/index.js");
+      const { runScenario, formatScenarioReport } = await import("./backtest/scenario.js");
+
+      const strategy = await backtest.buildSimulationStrategy({
+        ...(poolArg ? { poolAddress: poolArg } : {}),
+        // A scenario is about staying in range, so recentring never fires.
+        outOfRangePolicy: "hold",
+        ...(flag(rest, "slippage") !== undefined
+          ? { executionSlippageBps: Number(flag(rest, "slippage")) }
+          : {}),
+        intrabar: true,
+      });
+
+      const { feeTvlRatio24h, lpCapitalUsd, ...rest2 } = strategy.params;
+      void feeTvlRatio24h;
+      void lpCapitalUsd;
+
+      const report = runScenario({
+        feeAprPct: Number(flag(rest, "fee-apr") ?? 50),
+        days: Number(flag(rest, "days") ?? 14),
+        capitalUsd: Number(flag(rest, "capital") ?? config.capital.lpUsd),
+        startPrice: strategy.startPrice,
+        annualVol: Number(flag(rest, "vol") ?? 0.42),
+        fundingHourly: Number(flag(rest, "funding") ?? 0.0000125),
+        strategy: rest2,
+      });
+
+      console.log(formatScenarioReport(report));
       return;
     }
 
