@@ -90,6 +90,18 @@ export function rankPools(pools: PoolMetrics[], markets: MarketLookup): ScanResu
       continue;
     }
 
+    // One short is simpler than two: a single margin bucket, one liquidation
+    // price, and no correlation between legs to reason about.
+    if (config.selection.requireStableQuote && plan.legs.length !== 1) {
+      rejected.push({
+        pool,
+        reason:
+          `needs ${plan.legs.length} hedge legs (${plan.legs.map((l) => l.symbol).join(" + ")}); ` +
+          `REQUIRE_STABLE_QUOTE only accepts pools hedged with a single short`,
+      });
+      continue;
+    }
+
     candidates.push({ pool, plan, score: plan.expectedReturn.netAprOnTotalCapital });
   }
 
