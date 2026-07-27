@@ -21,8 +21,10 @@ export async function createPaperEngine(options: {
 }): Promise<{ engine: Engine; hedger: PaperHedger }> {
   const poolAddress = options.poolAddress ?? config.selection.poolAddress;
 
-  // The pool's real fee rate drives the simulated position's fee accrual.
-  let feeRate = 0.002;
+  // The pool's real fee rate drives the simulated position's fee accrual. When
+  // no address is given the pool is only chosen later by the scan, so leave it
+  // undefined and let PaperPool read it from chain once it knows the pool.
+  let feeRate: number | undefined;
   if (poolAddress) {
     try {
       const pool = await new MeteoraApi().fetchPair(poolAddress);
@@ -30,7 +32,7 @@ export async function createPaperEngine(options: {
     } catch (error) {
       logger.warn(
         { err: String(error) },
-        "could not read the pool's fee rate; falling back to 0.2%",
+        "could not read the pool's fee rate from the API; will read it on-chain",
       );
     }
   }
