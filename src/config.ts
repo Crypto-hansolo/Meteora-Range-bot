@@ -125,8 +125,29 @@ const envSchema = z.object({
 
 const DEFAULT_QUOTES = ["USDC", "USDT", "SOL"];
 
+/**
+ * Drop blank variables so they behave exactly like unset ones.
+ *
+ * `.env.example` ships optional settings as bare keys (`HEDGE_COLLATERAL_USD=`),
+ * and dotenv turns those into empty strings rather than leaving them out. Zod
+ * then sees `""`, `z.coerce.number()` makes that `0`, and `.positive()` rejects
+ * it — so copying the example file produced a config that refused to load.
+ *
+ * Stripping blanks up front fixes every field at once, present and future:
+ * `.optional()` yields undefined and `.default()` yields the default, which is
+ * what a blank line plainly means. No field in this schema wants an empty
+ * string that differs from being unset.
+ */
+function withoutBlanks(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined && value.trim() !== "") out[key] = value;
+  }
+  return out;
+}
+
 function buildConfig() {
-  const parsed = envSchema.safeParse(process.env);
+  const parsed = envSchema.safeParse(withoutBlanks(process.env));
 
   if (!parsed.success) {
     const issues = parsed.error.issues
