@@ -33,9 +33,20 @@ if (files.length === 0) {
   process.exit(1);
 }
 
+// Only forward flags (--foo, --foo=bar) to `node --test`. Anything else is not
+// a file we're missing — our own listing above is exhaustive — so it can only
+// be a stray argument (e.g. a shell word or `#` comment pasted along with the
+// command), and node --test would otherwise try to load it as a test file.
+const extraArgs = process.argv.slice(2);
+const flags = extraArgs.filter((arg) => arg.startsWith("--"));
+const ignored = extraArgs.filter((arg) => !arg.startsWith("--"));
+if (ignored.length > 0) {
+  console.error(`Ignoring unexpected argument(s): ${ignored.join(" ")}`);
+}
+
 const result = spawnSync(
   process.execPath,
-  ["--test", "--import", "tsx", ...files, ...process.argv.slice(2)],
+  ["--test", "--import", "tsx", ...files, ...flags],
   { stdio: "inherit" },
 );
 
