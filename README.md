@@ -154,22 +154,70 @@ komplett aufessen. Deshalb steht Funding in `scan` als eigene Spalte.
 ## 3. Setup
 
 ```bash
+git clone https://github.com/Crypto-hansolo/Meteora-Range-bot
+cd Meteora-Range-bot
 npm install
-cp .env.example .env      # ausfüllen
+cp .env.example .env
 ```
 
-Pflicht:
+Node 20 oder neuer.
 
-| Variable | Zweck |
+### Welche Keys wofür?
+
+| Befehl | Solana-Key | Hyperliquid-Key | RPC |
+|--------|-----------|-----------------|-----|
+| `scan`, `plan` | – | – | – |
+| `simulate`, `scenario` | – | – | – |
+| `backtest` | – | – | – |
+| **`paper`** | – | – | ✓ |
+| `run`, `close`, `status` | ✓ | ✓ | ✓ |
+
+**Für Paper Trading brauchst du keinen einzigen privaten Schlüssel.** Es liest
+nur: Pool-Daten von Meteora, Preise und Funding von Hyperliquid, den aktiven Bin
+von der Chain. Positionen und Fills sind simuliert, der State liegt in einer
+eigenen Datei (`data/state.paper.json`) und kann eine echte Session nicht
+berühren. Abgesichert in [`test/credentials.test.ts`](test/credentials.test.ts),
+damit es nicht still kaputtgeht.
+
+### Minimal-`.env` für Paper Trading
+
+```bash
+RPC_URL=https://api.mainnet-beta.solana.com
+```
+
+Das reicht. Der öffentliche Endpoint rate-limitet aber spürbar — bei einem
+Poll-Intervall von 30 s geht es meist gut, für längere Läufe hol dir einen
+kostenlosen Key bei Helius, QuickNode oder Alchemy und trag dessen URL ein.
+
+### Für den Live-Betrieb, später
+
+| Variable | Woher |
 |----------|-------|
-| `RPC_URL` | Solana-RPC. Ein privater Endpoint ist praktisch Pflicht, der öffentliche rate-limitet. |
-| `SOLANA_PRIVATE_KEY` | Base58 (Phantom-Export) oder JSON-Byte-Array (`solana-keygen`). |
-| `HL_PRIVATE_KEY` | Hyperliquid-Key. **Nutze ein API-/Agent-Wallet** — es kann traden, aber nicht auszahlen. |
-| `HL_ACCOUNT_ADDRESS` | Nur nötig, wenn oben ein Agent-Wallet steht: Reads müssen auf den Master-Account zeigen. |
+| `SOLANA_PRIVATE_KEY` | Phantom → Einstellungen → Private Key exportieren (Base58), oder `solana-keygen` (JSON-Array). **Eigenes Wallet nehmen, nicht das Haupt-Wallet.** |
+| `HL_PRIVATE_KEY` | Hyperliquid → API → **API Wallet erzeugen**. Das kann traden, aber nicht auszahlen. Niemals den Key deines Haupt-Wallets. |
+| `HL_ACCOUNT_ADDRESS` | Deine Hyperliquid-Hauptadresse. Nur nötig, weil ein API-Wallet zwar handelt, die Positionen aber auf dem Hauptkonto liegen. |
 
-`DRY_RUN` steht auf `true` und muss bewusst auf `false` gesetzt werden.
+`DRY_RUN` steht auf `true` und muss bewusst auf `false` gesetzt werden, bevor
+irgendetwas Echtes passiert.
 
----
+### Erste Schritte
+
+```bash
+npm test                            # 232 Tests, kein Netz nötig
+npm run scan                        # welche Pools gibt es? (ohne Keys)
+npm run backtest -- <pool-address>  # echte 90-Tage-Historie des Kandidaten
+npm run paper -- <pool-address>     # Live-Preise, simulierte Fills
+```
+
+`scan` liefert dir die Pool-Adressen für die anderen Befehle. Läuft der Scan ins
+Leere, sind die Filter zu streng — `MIN_FEE_TVL_RATIO_24H` und `MIN_TVL_USD`
+sind die üblichen Verdächtigen.
+
+Beim Paper-Lauf: der Bot pollt alle 30 s (`POLL_INTERVAL_MS`). Bei ruhigem Markt
+siehst du minutenlang nur „drift unter Schwelle". Wenn du schneller etwas sehen
+willst, setz `HEDGE_REBALANCE_THRESHOLD_PCT=1` — dann handelt er sichtbar öfter.
+Beenden mit Strg-C; die simulierte Position bleibt im State stehen, `npm run
+close` räumt auf.
 
 ## 4. Benutzung
 
@@ -611,7 +659,7 @@ Rangfolge in der Tabelle ist belastbarer als die absoluten Zahlen.
 Netzwerkzugang zu `dlmm-api.meteora.ag` und `api.hyperliquid.xyz`. Alle SDK-Aufrufe
 sind gegen die installierten Typdefinitionen von `@meteora-ag/dlmm@1.9.14` und
 `@nktkas/hyperliquid@0.33.2` geschrieben und typgeprüft, und die gesamte Logik ist
-offline durchgetestet (221 Tests) — aber **fahre zuerst `npm run paper`**, dann
+offline durchgetestet (232 Tests) — aber **fahre zuerst `npm run paper`**, dann
 `DRY_RUN=true`, dann einen kleinen Betrag.
 
 ---
@@ -651,7 +699,7 @@ src/
     scenario.ts          Was-wäre-wenn: Aufhebung und Kosten nebeneinander
   paper/venues.ts        Live-Daten + simulierte Ausführung
   util/                  HTTP mit Retries, Balance-Prüfung
-test/                    221 Offline-Tests
+test/                    232 Offline-Tests
 ```
 
 ### Zur `meteora/sdk.ts`-Datei
@@ -669,7 +717,7 @@ test/                    221 Offline-Tests
 ## 10. Entwicklung
 
 ```bash
-npm test          # 221 Offline-Tests, kein Netzwerk nötig
+npm test          # 232 Offline-Tests, kein Netzwerk nötig
 npm run typecheck # tsc --noEmit
 npm run build     # -> dist/
 ```
