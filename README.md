@@ -172,15 +172,45 @@ npm install     # nur nötig, wenn neue Abhängigkeiten dazugekommen sind
 
 `git clone` brauchst du nie wieder, außer du löschst den Ordner.
 
-Node 20 oder neuer. Wer nicht gern im Terminal arbeitet: GitHub Desktop macht
-Klonen und Aktualisieren per Knopfdruck, der Rest läuft trotzdem über die
-Kommandozeile.
+**Node 20 reicht, Node 22 LTS ist besser.** Wer nicht gern im Terminal arbeitet:
+GitHub Desktop macht Klonen und Aktualisieren per Knopfdruck, der Rest läuft
+trotzdem über die Kommandozeile.
 
 > **Kurz zum Unterschied:** `git clone` holt den *Quellcode* aus dem Repo.
 > `npm install` holt die *Bibliotheken*, die dieser Code braucht (Solana-SDK,
 > Hyperliquid-SDK und so weiter) nach `node_modules/`. Ein
 > `npm install meteora-range-bot` gibt es nicht — das Projekt ist nicht als
 > Paket in der npm-Registry veröffentlicht, sondern Quellcode in deinem Repo.
+
+### Zwei Meldungen bei `npm install`, die man ignorieren kann
+
+**`EBADENGINE ... @nktkas/hyperliquid ... required: node >=22.12.0`**
+
+Das SDK deklariert Node 22, läuft aber auf Node 20. Die einzige neuere API, die
+es benutzt, ist `Promise.withResolvers` — und die polyfillt es selbst
+(`transport/_polyfills.js` prüft auf Existenz und fällt sonst auf eine eigene
+Implementierung zurück). Nachgeprüft, indem die API entfernt und das SDK danach
+geladen wurde: `HttpTransport`, `InfoClient`, `ExchangeClient` und die
+Format-Helfer funktionieren alle.
+
+Trotzdem: **Node 22 LTS installieren, wenn es einfach geht.** Die Deklaration
+ist eine Ansage für die Zukunft, und die nächste SDK-Version könnte den Polyfill
+fallen lassen. Mit `nvm`:
+
+```bash
+nvm install 22 && nvm use 22
+```
+
+**`11 vulnerabilities (7 moderate, 4 high)`**
+
+Alle transitiv aus dem Solana-Stack, keine davon aus diesem Code. Die Wurzel ist
+`bigint-buffer` (Buffer-Overflow in `toBigIntLE()`), von dem
+`@solana/spl-token` → `@meteora-ag/dlmm` abhängen, plus `uuid`.
+
+**`npm audit fix` hilft nicht** — `bigint-buffer@1.1.5` ist die neueste Version
+und zugleich die verwundbare; das Paket wird nicht mehr gepflegt. `npm audit`
+meldet für beide `fixAvailable: false`. Das betrifft jedes Solana-JS-Projekt
+gleichermaßen und lässt sich erst upstream lösen. Nicht hinterherjagen.
 
 ### Welche Keys wofür?
 
