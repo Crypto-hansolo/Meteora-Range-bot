@@ -397,6 +397,38 @@ describe("rankPools", () => {
   });
 });
 
+describe("REQUIRE_STABLE_QUOTE", () => {
+  const btcSol = () =>
+    parsed({ mint_x: WBTC, mint_y: SOL, name: "wBTC-SOL", current_price: 300 });
+
+  it("rejects a two-legged pool by default", () => {
+    const { candidates, rejected } = scoring.rankPools([btcSol()], lookup);
+    assert.equal(candidates.length, 0);
+    assert.match(rejected[0]!.reason, /single short/);
+    assert.match(rejected[0]!.reason, /BTC \+ SOL|SOL \+ BTC/);
+  });
+
+  it("still accepts a stable-quoted pool", () => {
+    const { candidates } = scoring.rankPools([parsed()], lookup);
+    assert.equal(candidates.length, 1);
+    assert.equal(candidates[0]!.plan.legs.length, 1);
+  });
+
+  it("lets a two-legged pool through when switched off", async () => {
+    const { rebuildForTest } = await import("../src/config.js");
+    process.env.REQUIRE_STABLE_QUOTE = "false";
+    rebuildForTest();
+    try {
+      const { candidates } = scoring.rankPools([btcSol()], lookup);
+      assert.equal(candidates.length, 1);
+      assert.equal(candidates[0]!.plan.legs.length, 2);
+    } finally {
+      delete process.env.REQUIRE_STABLE_QUOTE;
+      rebuildForTest();
+    }
+  });
+});
+
 describe("pools where both sides carry delta", () => {
   /** wBTC/SOL: neither side is a stablecoin, so both need their own short. */
   const btcSol = () =>

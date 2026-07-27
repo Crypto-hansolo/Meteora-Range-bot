@@ -67,6 +67,15 @@ const envSchema = z.object({
   TOKEN_WHITELIST: csv(),
   /** Quote assets we accept on the pool's Y side. */
   QUOTE_WHITELIST: csv(),
+  /**
+   * Only accept pools quoted in a stablecoin, so exactly one short is needed.
+   *
+   * A crypto/crypto pool such as JUP/SOL carries delta on both sides and needs
+   * two perp positions, which means two margin buckets, two liquidation prices
+   * and correlation between them. Requiring a stable quote keeps the hedge to a
+   * single leg, which is what most operators want.
+   */
+  REQUIRE_STABLE_QUOTE: boolish(true),
   SCAN_LIMIT: z.coerce.number().int().positive().default(10),
 
   // ----------------------------------------------------------- LP range/fill
@@ -161,6 +170,7 @@ function buildConfig() {
       quoteWhitelist: (e.QUOTE_WHITELIST.length ? e.QUOTE_WHITELIST : DEFAULT_QUOTES).map((s) =>
         s.toUpperCase(),
       ),
+      requireStableQuote: e.REQUIRE_STABLE_QUOTE,
       scanLimit: e.SCAN_LIMIT,
     },
     lp: {

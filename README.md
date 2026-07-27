@@ -333,6 +333,44 @@ Konsequenzen:
 - Der Live-Bot behandelt eine nicht ausgeführte Hedge-Order als Risiko-Ereignis
   (`TickReport.hedgeDegraded`, Error-Log mit dem exponierten Betrag).
 
+### Welchen Pool nehmen?
+
+Der Bot akzeptiert per Default nur Pools mit **Stablecoin-Quote**
+(`REQUIRE_STABLE_QUOTE=true`) — also genau ein Short pro Position. Ein
+Crypto/Crypto-Pool wie JUP/SOL trägt Delta auf beiden Seiten und bräuchte zwei
+Perp-Positionen: zwei Margin-Töpfe, zwei Liquidationspreise, korreliert. Der Bot
+kann das (`REQUIRE_STABLE_QUOTE=false`), aber es ist mehr Angriffsfläche für
+wenig Gegenwert.
+
+Innerhalb der Stable-Pools entscheidet die **Volatilität des Basis-Assets**,
+nicht die Fees/TVL-Ratio. 400 Pfade × 90 Tage, ±10% Range, 3 bps Slippage:
+
+| Pool | ang. Vola | Fees 1%/Tag | | Fees 2%/Tag | | Breakeven |
+|------|-----------|-------------|---|-------------|---|-----------|
+| | | Median | Gewinn | Median | Gewinn | pro Tag |
+| cbBTC/USDC | 42% | **+41,5%** | 99% | **+94,0%** | 100% | 0,23% |
+| wETH/USDC | 55% | +29,4% | 98% | +79,9% | 100% | 0,43% |
+| SOL/USDC | 80% | +0,8% | 53% | +38,8% | 98% | 0,90% |
+| JUP/USDC | 110% | -28,9% | 0% | +2,4% | 56% | 1,41% |
+| WIF/USDC | 150% | -56,3% | 0% | -33,7% | 0% | 1,83% |
+
+*(Vola-Werte sind angenommene Regime, keine Messung. Die Rangfolge ist der
+Punkt, nicht die Nachkommastellen.)*
+
+**BTC- und ETH-Pools sind mit Abstand die besten Kandidaten** — sie brauchen
+0,23% bzw. 0,43% Fees/TVL pro Tag zum Break-Even, und solche Pools gibt es
+regelmäßig. SOL ist der Grenzfall: bei 1%/Tag praktisch ein Münzwurf, bei 2%/Tag
+gut. Memecoin-Pools verlieren zuverlässig, egal wie fett die Fees aussehen — bei
+WIF gab es in 12 von 400 Pfaden sogar Liquidationen.
+
+Das dreht die naive Fees/TVL-Rangliste um: der Pool mit 3%/Tag auf einem
+Memecoin ist ein schlechteres Geschäft als der mit 0,8%/Tag auf cbBTC.
+
+> **Noch nicht im `scan` abgebildet.** Die Rangliste sortiert nach Netto-APR
+> inklusive Funding, aber ohne Vola-Abschlag. Bis das drin ist: nimm die
+> `scan`-Ausgabe als Vorauswahl und prüf den Kandidaten mit
+> `npm run simulate -- <pool> --vol=<geschätzte Vola>`.
+
 ### Wo die Strategie funktioniert
 
 Zusammengefasst, bei realistischen 3 bps Slippage und weiter Range:
