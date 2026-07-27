@@ -378,33 +378,73 @@ ist Loss-versus-Rebalancing. Sie ist immer negativ.
 
 ### Welchen Fee-APR brauchst du also?
 
-Break-Even-Fee-APR, 300 Pfade je Zelle, 3 bps Slippage, Recenter aktiv:
+Hier ist eine Falle eingebaut, in die ich beim ersten Anlauf selbst getappt bin.
+Man kann die Breakeven-Schwelle **nicht** direkt gegen den quotierten Pool-APR
+halten, denn beide hängen von der Range-Breite ab. Wer breiter liegt, braucht
+weniger — verdient aber auch weniger.
 
-| Vola | ±5% Range | ±10% | ±15% | ±25% |
-|------|-----------|------|------|------|
-| BTC 42%  | 208% | 88% | **52%** | **27%** |
-| ETH 55%  | 331% | 167% | 104% | **56%** |
-| SOL 80%  | 527% | 330% | 235% | 135% |
-| JUP 110% | 660% | 502% | 413% | 267% |
+Der Pool quotiert seinen APR über die *durchschnittliche* Liquiditätsverteilung.
+Liegst du enger, verdienst du proportional mehr; liegst du breiter, weniger. Bei
+einem Pool mit 50% APR (Referenz ±10%) verdienst du bei ±W% also `50% × 10/W`:
 
-*(90 Tage Haltedauer; bei 14 Tagen fast identisch, die Fixkosten amortisieren
-nur etwas schlechter.)*
+**BTC, 42% Vola, 300 Pfade je Zeile:**
 
-Damit wird deine 40–50%-APR-Zahl für BTC/USDC einordbar:
+| Range | verdient | nötig | Verhältnis | Median 90d | p5 |
+|-------|----------|-------|------------|------------|-----|
+| ±5%  | 100% | 206% | 0,49 | -13,1% | -29,4% |
+| ±10% | 50%  | 91%  | 0,55 | -4,8%  | -15,9% |
+| ±15% | 33%  | 55%  | 0,61 | -1,9%  | -8,8% |
+| ±20% | 25%  | 38%  | 0,66 | -0,7%  | -4,3% |
+| ±25% | 20%  | 27%  | 0,73 | -0,4%  | -3,2% |
+| ±35% | 14%  | 17%  | 0,84 | -0,1%  | -2,2% |
 
-- **±5% Range: chancenlos.** Du bräuchtest 208% APR.
-- **±15% Range: knapp machbar.** 52% nötig, 40–50% verfügbar — also etwa
-  Nullsummenspiel.
-- **±25% Range: geht auf.** 27% nötig, deutlich weniger als 40–50%.
+**Kein Verhältnis erreicht 1,0.** Bei 50% Pool-APR verliert die Strategie auf BTC
+in jeder Breite. Dass die Zahlen mit der Breite gegen Null laufen, ist kein
+Gewinn — man macht nur *weniger von einem Verlustgeschäft*. Im Grenzfall ±∞
+liegt das Kapital praktisch brach.
 
-Die Zeit in Range ist bei aktivem Recentering übrigens fast überall >96%, auch
-bei ±5%. Der Engpass ist also nicht das Herausfallen, sondern das Rebalancing
-zwischendurch.
+Bei volatileren Assets wird es schlechter, und die Breite hilft dort **gar
+nicht** mehr:
 
-**Praktisch heißt das:** weite Ranges auf ruhigen Assets. Eine ±5%-Range auf BTC
-mit 50% APR verliert; eine ±25%-Range auf demselben Pool verdient. Das ist das
-Gegenteil dessen, was man als reiner LP täte — dort will man eng sein, um die
-Fee-Dichte zu maximieren. Mit Hedge kippt die Rechnung.
+| Asset | ±5% | ±10% | ±20% | ±35% |
+|-------|-----|------|------|------|
+| BTC 42% | 0,49 | 0,55 | 0,66 | 0,84 |
+| ETH 55% | 0,30 | 0,30 | 0,34 | 0,40 |
+| SOL 80% | 0,19 | 0,15 | 0,14 | 0,16 |
+
+**Die eigentliche Erkenntnis:** Weil verdiente *und* benötigte Fees beide grob
+mit `1/Breite` skalieren, ist das Verhältnis über die Breiten **fast flach**.
+Die Range-Breite ist ein Hebel zweiter Ordnung. Erster Ordnung ist das
+Verhältnis von **Fee-Rate zu Volatilität** — und das rettet keine Range-Wahl.
+
+Was du wirklich brauchst: einen Pool, dessen Fee-Rate die Schwelle bei einer
+*nutzbaren* Breite schlägt. Für BTC/USDC heißt das grob **70–80% quotierter
+APR** statt der 40–50%, die du genannt hast. Für SOL/USDC liegt die Latte bei
+einem Vielfachen und ist realistisch kaum zu erreichen.
+
+### Und das Funding?
+
+Kaum relevant. Über die gesamte plausible Bandbreite bewegt es das Ergebnis um
+gut einen Prozentpunkt über 90 Tage (BTC, ±20%):
+
+| Funding-APR | Median 90d |
+|-------------|------------|
+| +20% (Longs zahlen) | -0,4% |
+| +11% (typisch) | -0,7% |
+| 0% | -1,2% |
+| -11% (Shorts zahlen) | -1,6% |
+
+Zur Klarstellung, weil das oft andersherum vermutet wird: Funding ist in Krypto
+meist **positiv**, Longs zahlen Shorts. Der Hedge *verdient* also normalerweise
+Funding. Rückenwind — aber gegen die Gamma-Kosten ein Rundungsfehler.
+
+> **Wie belastbar ist das?** Das Fee-Konzentrationsmodell ist linear
+> (`Fee-Rate ∝ 1/Breite`). Real hängt dein Volumenanteil davon ab, wie die
+> übrige Pool-Liquidität verteilt ist, und Volumen konzentriert sich näher am
+> Spot — die echte Beziehung könnte in beide Richtungen abweichen. Was
+> robust bleibt: verdiente und benötigte Fees skalieren *gleichsinnig* mit der
+> Breite, das Verhältnis ist deshalb flach. Diese Struktur trägt, die
+> Nachkommastellen nicht.
 
 ### Welchen Pool nehmen?
 
