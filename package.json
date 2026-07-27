@@ -31,7 +31,7 @@
   "author": "",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=20.0.0"
   },
   "dependencies": {
     "@meteora-ag/dlmm": "^1.9.14",
