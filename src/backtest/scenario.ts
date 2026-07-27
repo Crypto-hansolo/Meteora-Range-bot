@@ -321,11 +321,29 @@ export function formatScenarioReport(r: ScenarioReport): string {
   push(`  Kosten der Schwankung             ${usd(-gammaCost)}`);
   push(`  Netto bei unverändertem Preis     ${usd(noisy.result.netPnlUsd)}`);
   push();
+
+  // The trap worth guarding against: comparing a pool's quoted APR directly
+  // against a breakeven computed at a *different* range width. Both scale with
+  // width, so only the ratio at the same width means anything.
+  const days = Math.max(r.params.days, 1e-9);
+  // Everything the fees had to cover: what was earned, minus what survived.
+  const breakevenApr =
+    ((feeUsd - noisy.result.netPnlUsd) / r.params.capitalUsd / days) * 365 * 100;
+
+  push(`Ist dieser Pool tragfähig? (bei ±${r.params.strategy.rangeWidthPct}% Range)`);
+  push("-".repeat(88));
+  push(`  Fee-APR, den du bei dieser Breite verdienst   ${r.params.feeAprPct.toFixed(0)}%`);
+  push(`  Fee-APR, den du bei dieser Breite brauchst    ${breakevenApr.toFixed(0)}%`);
   push(
-    feeUsd > gammaCost
-      ? "  Die Fees tragen die Rebalancing-Kosten. Die Richtung des Preises ist egal."
-      : "  Die Rebalancing-Kosten fressen die Fees. Mehr Fees oder weniger Vola nötig.",
+    `  Verhältnis                                   ${(r.params.feeAprPct / Math.max(breakevenApr, 1e-9)).toFixed(2)}` +
+      (r.params.feeAprPct >= breakevenApr ? "   tragfähig" : "   zu wenig"),
   );
+  push();
+  push("  Achtung, häufiger Denkfehler: den quotierten Pool-APR NICHT gegen eine");
+  push("  Schwelle für eine andere Range-Breite halten. Verdiente und benötigte");
+  push("  Fees skalieren beide grob mit 1/Breite, das Verhältnis bleibt deshalb");
+  push("  fast gleich. Eine breitere Range senkt die Schwelle — und die Einnahme");
+  push("  im selben Maß. Sie rettet keinen Pool, dessen Fee-Rate zu niedrig ist.");
 
   return lines.join("\n");
 }
