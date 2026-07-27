@@ -40,6 +40,69 @@ describe("config without any keys", () => {
   });
 });
 
+describe("blank values in .env", () => {
+  /**
+   * `.env.example` ships optional settings as bare keys, and dotenv turns those
+   * into empty strings. Zod's `.optional()` only covers *unset*, so `""` used to
+   * coerce to 0 and fail `.positive()` — copying the example file produced a
+   * config that refused to load at all.
+   */
+  const blanks = [
+    "HEDGE_COLLATERAL_USD",
+    "HEDGE_TARGET_LEVERAGE",
+    "HEDGE_MARGIN_TOPUP_LEVERAGE",
+  ] as const;
+
+  it("treats a blank optional number as not set", () => {
+    for (const key of blanks) process.env[key] = "";
+    try {
+      config.rebuildForTest();
+      assert.equal(config.config.capital.hedgeCollateralUsd, undefined);
+      assert.equal(config.config.hedge.targetLeverage, undefined);
+      assert.equal(config.config.hedge.marginTopupLeverage, undefined);
+    } finally {
+      for (const key of blanks) delete process.env[key];
+      config.rebuildForTest();
+    }
+  });
+
+  it("treats a blank value with a default as not set", () => {
+    process.env.MIN_TVL_USD = "";
+    process.env.RANGE_WIDTH_PCT = "   ";
+    try {
+      config.rebuildForTest();
+      // The default, not zero.
+      assert.equal(config.config.selection.minTvlUsd, 250_000);
+      assert.equal(config.config.lp.rangeWidthPct, 5);
+    } finally {
+      delete process.env.MIN_TVL_USD;
+      delete process.env.RANGE_WIDTH_PCT;
+      config.rebuildForTest();
+    }
+  });
+
+  it("still honours a value that is actually set", () => {
+    process.env.HEDGE_TARGET_LEVERAGE = "4";
+    try {
+      config.rebuildForTest();
+      assert.equal(config.config.hedge.targetLeverage, 4);
+    } finally {
+      delete process.env.HEDGE_TARGET_LEVERAGE;
+      config.rebuildForTest();
+    }
+  });
+
+  it("still rejects a value that is set but invalid", () => {
+    process.env.HEDGE_TARGET_LEVERAGE = "-1";
+    try {
+      assert.throws(() => config.rebuildForTest(), /HEDGE_TARGET_LEVERAGE/);
+    } finally {
+      delete process.env.HEDGE_TARGET_LEVERAGE;
+      config.rebuildForTest();
+    }
+  });
+});
+
 describe("read-only clients without keys", () => {
   it("builds a Hyperliquid client that can read but not trade", async () => {
     const { HyperliquidHedger } = await import("../src/hedge/hyperliquid.js");
