@@ -13,6 +13,9 @@
     "run": "tsx src/index.ts run",
     "status": "tsx src/index.ts status",
     "close": "tsx src/index.ts close",
+    "backtest": "tsx src/index.ts backtest",
+    "paper": "tsx src/index.ts paper",
+    "simulate": "tsx src/index.ts simulate",
     "test": "node --test --import tsx \"test/*.test.ts\"",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

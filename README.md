@@ -182,6 +182,7 @@ npm run close                       # alles auflösen
 
 npm run backtest -- <pool>          # echte Historie durchspielen
 npm run paper -- <pool>             # Live-Preise, simulierte Fills
+npm run simulate -- <pool>          # Monte Carlo über viele Preispfade
 ```
 
 `scan` ohne Argument, dann `plan`, dann `run` ist der normale Weg. `run` ohne
@@ -247,49 +248,109 @@ Ein Paper-Modus, der den Loop nachbaut, würde nur beweisen, dass der Nachbau
 funktioniert. Deshalb sind LP- und Perp-Venue hinter schmalen Interfaces
 ([`src/strategy/venues.ts`](src/strategy/venues.ts)) austauschbar.
 
-### Was die Backtests ergeben haben
+### `npm run simulate -- <pool-address>` — Monte Carlo
 
-Drei Befunde, die den Bot verändert haben:
+Ein einzelner Backtest sagt dir, was **einmal** passiert ist. Das hier sagt dir
+die **Verteilung**, und nur die ist handlungsrelevant:
 
-**1. Der Gamma-Kostenblock frisst die Fees.** Bei ~80% annualisierter
-Volatilität, ±5%-Range und 5%-Rebalance-Schwelle braucht die Position rund
-**4% Fees/TVL pro Tag**, nur um break-even zu laufen. Sensitivität aus
-simulierten GBM-Pfaden (30 Tage, 1000 $ LP-Kapital, 30 bps Slippage):
+```bash
+npm run simulate -- <pool> --paths=1000 --days=90 --vol=0.8
+```
 
-| Vola | ±3% Range | ±5% Range | ±10% Range |
-|------|-----------|-----------|------------|
-| 40%  | 2,52%/Tag | 1,38%/Tag | 0,80%/Tag |
-| 60%  | 4,09%/Tag | 2,88%/Tag | 2,00%/Tag |
-| 80%  | 5,17%/Tag | 4,11%/Tag | 3,22%/Tag |
-| 120% | 6,29%/Tag | 5,57%/Tag | 4,60%/Tag |
+Die Preispfade sind synthetisch, aber nicht naiv: GARCH-Volatilitäts-Clustering
+(ruhige und wilde Phasen statt gleichförmigem Rauschen) und Student-t-Tails
+(Sprünge, die eine Normalverteilung nicht hergibt). Beides ist nötig, weil die
+Strategie short Gamma *und* short Tails ist — reines GBM würde sie schönrechnen.
 
-Lies das als: **enge Ranges und hohe Vola sind die Feinde.** Eine engere Range
-verdient mehr Fees pro Dollar, kostet aber überproportional mehr Rebalancing.
-Der Hedge-Umsatz erreicht das 95-fache des LP-Kapitals im Monat — bei 30 bps
-Slippage sind das allein ~29% des LP-Kapitals.
+### Was die Tests ergeben haben
 
-**2. Die Rebalance-Schwelle ist nicht das, was den Hedge-Fehler bestimmt.**
-Zwischen 1% und 10% Schwelle war der maximale ungehedgte Betrag *identisch*.
-Der Bot kann nicht schneller reagieren, als er beobachtet — bei 1%-Preissprüngen
-zwischen zwei Samples ist das Delta längst weggelaufen, bevor irgendeine
-Schwelle geprüft wird. **`POLL_INTERVAL_MS` ist der wichtigere Regler.**
+Fünf Befunde, jeder hat den Code oder die Doku verändert.
 
-**3. Der Hyperliquid-Account blutet in Trends aus.** Das war der teuerste Fund.
-In einer anhaltenden Rally verliert der Short auf Hyperliquid, während der
-passende Gewinn in der LP-Position auf Solana anfällt. Der Perp-Account leert
-sich, obwohl die Gesamtposition gesund ist — und irgendwann werden die
-Hedge-Orders mangels Margin abgelehnt. Der Backtest hat das anfangs still
-geschluckt (961 abgelehnte Orders, bis zu 853 $ ungehedgtes Delta).
+**1. Die Gamma-Kosten sind der Hauptgegner.** Über 1000 Pfade × 90 Tage bei 80%
+Vola, ±5%-Range, 2%/Tag Fees:
 
-Konsequenzen im Code:
+```
+                        p5        p25     median        p75        p95
+Return auf Kapital  -29.67%    -12.77%     -2.59%     +6.79%    +17.62%
+Max Drawdown         +3.77%     +7.23%    +12.31%    +19.21%    +36.13%
+Breakeven Fee/Tag    +1.18%     +1.32%     +1.41%     +1.51%     +1.65%
+
+Gewinnpfade: 42,7%   |   Hedge-Umsatz: 151x LP-Kapital   |   in range: 95,6%
+```
+
+**2. Die Slippage-Annahme entschied das Ergebnis — und war falsch gesetzt.**
+Der Backtest nahm anfangs `HEDGE_SLIPPAGE_BPS=30` als *realisierte* Kosten. Das
+ist aber die IOC-Limit-Aggressivität, also eine **Obergrenze für einen Fill**,
+nicht der erwartete Preis. Bei 150x Umsatz macht das alles aus:
+
+| angenommene Slippage | Gewinnpfade |
+|---------------------|-------------|
+| 30 bps | 8% |
+| 10 bps | 31% |
+| 3 bps (realistisch) | 48% |
+| 1 bps | 52% |
+
+Backtest und Simulation haben dafür jetzt einen eigenen Parameter
+(`--slippage=3`), getrennt von der Order-Aggressivität.
+
+**3. Range-Breite: fast egal für den Median, entscheidend für den Tail.**
+
+Hier hatte ich zuerst ein falsches Ergebnis. Mein Modell gab jeder Range
+dieselbe Fee-Rate — bei Concentrated Liquidity ist das falsch, eine engere Range
+verdient pro Dollar proportional mehr. Damit gewannen breite Ranges künstlich
+(+56% Median bei ±15%). Nach der Korrektur (`feeReferenceRangePct` skaliert die
+Fee-Rate mit der Liquiditätsdichte):
+
+| Range | eff. Fee/Tag | Median | p5 | Gewinnpfade | in range |
+|-------|--------------|--------|-----|-------------|----------|
+| ±2%  | 5,00% | +0,3% | -29,3% | 52% | 85% |
+| ±5%  | 2,00% | -3,2% | -29,8% | 40% | 96% |
+| ±10% | 1,00% | +0,6% | -21,6% | 52% | 99% |
+| ±25% | 0,40% | +2,0% | **-6,8%** | **70%** | 100% |
+
+Die Mehr-Fees einer engen Range werden vom Rebalancing und der Zeit außerhalb
+der Range aufgefressen. Der Median ist überall ähnlich — aber der **schlechte
+Fall ist bei einer weiten Range viermal milder**. Für eine gehebelte Position
+ist das der Unterschied, der zählt.
+
+**4. Die Rebalance-Schwelle begrenzt den Hedge-Fehler nicht.** Zwischen 1% und
+10% war der maximale ungehedgte Betrag *identisch*. Der Bot kann nicht schneller
+reagieren, als er beobachtet. **`POLL_INTERVAL_MS` ist der wichtigere Regler.**
+
+**5. Der Hyperliquid-Account blutet in Trends aus.** Der teuerste Fund. In einer
+Rally verliert der Short auf Hyperliquid, während der passende Gewinn in der
+LP-Position auf Solana anfällt. Der Perp-Account leert sich, obwohl die
+Gesamtposition gesund ist — und dann werden Hedge-Orders mangels Margin
+abgelehnt. Der Backtest hat das anfangs still geschluckt (961 abgelehnte Orders,
+bis zu 853 $ ungehedgtes Delta) und trotzdem eine hübsche Zahl gedruckt.
+
+Konsequenzen:
 - Der Backtest zählt fehlgeschlagene Hedges und setzt bei >0 ein
-  **`!! RESULT NOT TRUSTWORTHY !!`** über den Report — eine Zahl, die aus einem
-  ungehedgten Zeitraum stammt, ist eine Richtungswette, keine Strategie.
-- Der Live-Bot behandelt eine nicht ausgeführte Hedge-Order jetzt als
-  Risiko-Ereignis (`TickReport.hedgeDegraded`, Error-Log mit dem exponierten
-  Betrag) statt als beiläufige Warnung.
-- Der Backtest modelliert Margin-Transfers von der LP- zur Perp-Seite, weil
-  genau das im echten Betrieb nötig ist.
+  **`!! RESULT NOT TRUSTWORTHY !!`** über den Report. Eine Zahl aus einem
+  ungehedgten Zeitraum ist eine Richtungswette, keine Strategie.
+- Er modelliert Margin-Transfers von der LP- zur Perp-Seite, weil genau das im
+  echten Betrieb nötig ist.
+- Der Live-Bot behandelt eine nicht ausgeführte Hedge-Order als Risiko-Ereignis
+  (`TickReport.hedgeDegraded`, Error-Log mit dem exponierten Betrag).
+
+### Wo die Strategie funktioniert
+
+Zusammengefasst, bei realistischen 3 bps Slippage und weiter Range:
+
+| Vola | Median | p5 | Gewinnpfade | Breakeven Fee/Tag |
+|------|--------|-----|-------------|-------------------|
+| 30%  | +90,6% | +80,5% | 100% | 0,06% |
+| 50%  | +80,0% | +65,5% | 100% | 0,21% |
+| 80%  | +56,4% | +32,8% | 100% | 0,61% |
+| 120% | +15,3% | -14,4% | 83%  | 1,21% |
+| 160% | -19,1% | -42,9% | 3%   | 1,63% |
+
+*(bei ±15% Range mit unkorrigierter Fee-Skalierung — die Vola-Rangfolge bleibt
+gültig, die absoluten Zahlen sind optimistisch; siehe Befund 3.)*
+
+**Die Volatilität des Assets entscheidet, nicht die Fees/TVL-Ratio.** Ein Pool
+mit 3%/Tag auf einem 160%-Vola-Memecoin verliert; einer mit 1%/Tag auf SOL bei
+50% Vola gewinnt. Genau umgekehrt zur naiven Fees/TVL-Rangliste.
 
 **Für den Betrieb heißt das:** plane Kapital ein, um Margin nachzuschieben, und
 überwache das freie Collateral auf Hyperliquid. Der Bot transferiert **nicht**
@@ -382,17 +443,24 @@ Jupiter-Swap-Schritt wäre die naheliegende Erweiterung.
 Trends muss Margin von der LP- zur Perp-Seite nachgeschoben werden. Der Bot
 alarmiert, wenn ein Hedge nicht durchgeht, macht den Transfer aber nicht selbst.
 
-**Die Backtest-Zahlen sind Modell, nicht Historie.** Der Preispfad und das
-Funding sind echt, die Fee-Einnahmen eine Annahme, und die Ausführung unterstellt,
-dass ein IOC bei Mark ± Slippage gefüllt hätte. `HEDGE_SLIPPAGE_BPS` ist die
-IOC-Aggressivität, also eine *Obergrenze* — reale Fills sind oft besser, die
-Backtest-Kosten damit eher konservativ.
+**Die Backtest-Zahlen sind Modell, nicht Historie.** Beim `backtest` sind
+Preispfad und Funding echt, die Fee-Einnahmen eine Annahme, und die Ausführung
+unterstellt einen Fill bei Mark ± `--slippage`. Beim `simulate` sind zusätzlich
+die Preispfade synthetisch — GARCH plus Fat Tails, aber ohne Trends,
+Mean Reversion oder Korrelation mit dem Funding. Lies die Ausgabe als Bandbreite
+plausibler Ergebnisse, nicht als Prognose.
+
+**Die Fee-Skalierung über Range-Breiten ist ein grobes Modell.** `simulate`
+skaliert die Fee-Rate linear mit der Liquiditätsdichte
+(`feeReferenceRangePct / rangeWidthPct`). Real hängt der Anteil am Volumen davon
+ab, wie die *übrige* Pool-Liquidität verteilt ist — das weiß der Bot nicht. Die
+Rangfolge in der Tabelle ist belastbarer als die absoluten Zahlen.
 
 **Nicht live gegen die Mainnet-APIs getestet.** Die Entwicklungsumgebung hatte keinen
 Netzwerkzugang zu `dlmm-api.meteora.ag` und `api.hyperliquid.xyz`. Alle SDK-Aufrufe
 sind gegen die installierten Typdefinitionen von `@meteora-ag/dlmm@1.9.14` und
 `@nktkas/hyperliquid@0.33.2` geschrieben und typgeprüft, und die gesamte Logik ist
-offline durchgetestet (202 Tests) — aber **fahre zuerst `npm run paper`**, dann
+offline durchgetestet (221 Tests) — aber **fahre zuerst `npm run paper`**, dann
 `DRY_RUN=true`, dann einen kleinen Betrag.
 
 ---
@@ -427,9 +495,11 @@ src/
     data.ts              Hyperliquid-Candles und Funding-Historie
     runner.ts            Replay-Loop mit den Produktions-Entscheidungen
     report.ts            PnL-Zerlegung
+    paths.ts             Synthetische Pfade: GARCH-Clustering, Fat Tails
+    montecarlo.ts        Verteilung über viele Pfade statt eines Ergebnisses
   paper/venues.ts        Live-Daten + simulierte Ausführung
   util/                  HTTP mit Retries, Balance-Prüfung
-test/                    202 Offline-Tests
+test/                    221 Offline-Tests
 ```
 
 ### Zur `meteora/sdk.ts`-Datei
@@ -447,7 +517,7 @@ test/                    202 Offline-Tests
 ## 10. Entwicklung
 
 ```bash
-npm test          # 202 Offline-Tests, kein Netzwerk nötig
+npm test          # 221 Offline-Tests, kein Netzwerk nötig
 npm run typecheck # tsc --noEmit
 npm run build     # -> dist/
 ```

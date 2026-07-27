@@ -47,6 +47,7 @@ function params(overrides: Partial<BacktestParams> = {}): BacktestParams {
     strategy: "Spot",
     poolFeeRate: 0.002,
     feeTvlRatio24h: 0,
+    feeReferenceRangePct: 5,
 
     rebalanceThresholdPct: 5,
     minRebalanceUsd: 1,
