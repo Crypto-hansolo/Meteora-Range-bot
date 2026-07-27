@@ -21,6 +21,8 @@ Testing the strategy:
                     the bin step, fee rate and fees/TVL from.
   paper [pool]      Run the real decision loop against live prices with simulated
                     fills. No keys needed, nothing is sent anywhere.
+  simulate [pool]   Monte Carlo: run the strategy over many synthetic price paths
+                    and report the distribution of outcomes. Works offline.
 
 Backtest options:
   --days=N          Lookback window (default 30)
@@ -29,6 +31,15 @@ Backtest options:
   --fee-tvl=0.02    Override the pool's fees/TVL, as a daily fraction
   --no-intrabar     Use candle closes only instead of walking O/H/L/C
   --csv=PATH        Also write the equity curve
+
+Simulate options (all of the above apply too):
+  --paths=N         Independent price paths (default 200)
+  --vol=0.8         Annualised volatility to simulate (default 0.8)
+  --drift=0         Annualised drift (default 0)
+  --funding=0.0000125   Hourly funding rate paid to shorts
+  --seed=1          Change it to get a different set of paths
+  --slippage=3      Expected fill slippage in bps. Not HEDGE_SLIPPAGE_BPS, which
+                    bounds the IOC limit rather than describing a typical fill.
 
 The strategy in one line: provide liquidity in a high fee/TVL Meteora DLMM pool,
 then short exactly the pool's token exposure on Hyperliquid so the position earns
@@ -144,6 +155,9 @@ async function main(): Promise<void> {
         outOfRangePolicy: onExit,
         intrabar: !hasFlag(rest, "no-intrabar"),
         ...(feeTvl !== undefined ? { feeTvlRatio24h: Number(feeTvl) } : {}),
+        ...(flag(rest, "slippage") !== undefined
+          ? { executionSlippageBps: Number(flag(rest, "slippage")) }
+          : {}),
       });
 
       console.log(backtest.formatBacktestReport(result));
@@ -153,6 +167,55 @@ async function main(): Promise<void> {
         await writeFile(csvPath, backtest.equityCurveCsv(result), "utf-8");
         console.log(`\nEquity curve written to ${csvPath}`);
       }
+      return;
+    }
+
+    case "simulate": {
+      const backtest = await import("./backtest/index.js");
+      const { runMonteCarlo, formatMonteCarloReport } = await import(
+        "./backtest/montecarlo.js"
+      );
+
+      const days = Number(flag(rest, "days") ?? 30);
+      const intervalMs = 3_600_000; // hourly bars
+      const onExit = (flag(rest, "on-exit") ?? "recenter") as "hold" | "exit" | "recenter";
+
+      // Pool parameters come from a real pool when one is given, so the
+      // simulation is calibrated to something that exists.
+      const strategy = await backtest.buildSimulationStrategy({
+        ...(poolArg ? { poolAddress: poolArg } : {}),
+        outOfRangePolicy: onExit,
+        ...(flag(rest, "fee-tvl") !== undefined
+          ? { feeTvlRatio24h: Number(flag(rest, "fee-tvl")) }
+          : {}),
+        ...(flag(rest, "slippage") !== undefined
+          ? { executionSlippageBps: Number(flag(rest, "slippage")) }
+          : {}),
+        intrabar: !hasFlag(rest, "no-intrabar"),
+      });
+
+      if (Math.abs(strategy.achievedRangePct - config.lp.rangeWidthPct) > 0.01) {
+        console.log(
+          `Note: MAX_BINS=${config.lp.maxBins} caps the range at ` +
+            `±${strategy.achievedRangePct.toFixed(2)}% instead of the requested ` +
+            `±${config.lp.rangeWidthPct}%. Raise MAX_BINS or pick a pool with a ` +
+            `larger bin step to go wider.\n`,
+        );
+      }
+
+      const stats = runMonteCarlo({
+        paths: Number(flag(rest, "paths") ?? 200),
+        seed: Number(flag(rest, "seed") ?? 1),
+        bars: Math.round((days * 24 * 3_600_000) / intervalMs),
+        barMs: intervalMs,
+        startPrice: strategy.startPrice,
+        annualVol: Number(flag(rest, "vol") ?? 0.8),
+        annualDrift: Number(flag(rest, "drift") ?? 0),
+        fundingHourly: Number(flag(rest, "funding") ?? 0.0000125),
+        strategy: strategy.params,
+      });
+
+      console.log(formatMonteCarloReport(stats));
       return;
     }
 

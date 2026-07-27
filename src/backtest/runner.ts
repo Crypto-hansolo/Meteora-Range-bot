@@ -46,6 +46,18 @@ export interface BacktestParams {
    * input in the whole run — everything else comes from market data.
    */
   feeTvlRatio24h: number;
+  /**
+   * Range half-width, in percent, at which `feeTvlRatio24h` was observed.
+   *
+   * Concentrated liquidity pays in proportion to density: halving the range
+   * roughly doubles the fee rate per dollar while in range. Without this,
+   * comparing range widths is meaningless — every width would earn the same
+   * rate while the wider ones paid less to hedge, and wide would always "win"
+   * as a pure artefact.
+   *
+   * Set it equal to `rangeWidthPct` to disable the adjustment.
+   */
+  feeReferenceRangePct: number;
 
   rebalanceThresholdPct: number;
   minRebalanceUsd: number;
@@ -126,6 +138,8 @@ export interface BacktestResult {
   feeIncomeUsd: number;
   /** What arbitrage flow alone would have paid — a floor on fee income. */
   arbImpliedFeeUsd: number;
+  /** Fee rate actually applied, after adjusting for liquidity concentration. */
+  effectiveFeeTvlRatio24h: number;
   /** LP liquidity value change, excluding fees. */
   lpPricePnlUsd: number;
   hedgePnlUsd: number;
@@ -173,6 +187,13 @@ export function runBacktest(params: BacktestParams): BacktestResult {
   const { candles, lpCapitalUsd, poolFeeRate, feeTvlRatio24h, intrabar } = params;
 
   if (candles.length < 2) throw new Error("runBacktest: need at least two candles");
+  if (params.rangeWidthPct <= 0 || params.feeReferenceRangePct <= 0) {
+    throw new Error("runBacktest: range widths must be positive");
+  }
+
+  // Narrower ranges concentrate liquidity and earn proportionally more.
+  const concentration = params.feeReferenceRangePct / params.rangeWidthPct;
+  const effectiveFeeRate = feeTvlRatio24h * concentration;
 
   const first = candles[0]!;
   const startPrice = first.open;
@@ -280,7 +301,7 @@ export function runBacktest(params: BacktestParams): BacktestResult {
     // --- fee income (the one assumed input) --------------------------------
     if (leg.lp.inRange) {
       const lpValueNow = leg.lp.valueInQuote(closePrice);
-      feeIncomeUsd += lpValueNow * feeTvlRatio24h * (dtMs / 86_400_000);
+      feeIncomeUsd += lpValueNow * effectiveFeeRate * (dtMs / 86_400_000);
       inRangeSamples++;
     }
     totalSamples++;
@@ -400,6 +421,7 @@ export function runBacktest(params: BacktestParams): BacktestResult {
 
     feeIncomeUsd,
     arbImpliedFeeUsd,
+    effectiveFeeTvlRatio24h: effectiveFeeRate,
     lpPricePnlUsd,
     hedgePnlUsd,
     fundingUsd: broker.fundingUsd,
