@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { config } from "../config.js";
 import { logger } from "../logger.js";
-import { fetchJson } from "../util/http.js";
+import { fetchJson, HttpError } from "../util/http.js";
 
 /**
  * Client for Meteora's public DLMM pair API.
@@ -117,6 +117,10 @@ export class MeteoraApi {
    *
    * Server-side sorting is a hint only — we re-rank locally after computing our
    * own fee/TVL ratio, so a sort key the API silently ignores is harmless.
+   *
+   * The paginated endpoint has a history of moving around; if it 404s on the
+   * very first page (before any data was collected) we fall back to the plain
+   * `/pair/all` listing rather than failing every read-only command.
    */
   async fetchPairs(options: FetchPairsOptions = {}): Promise<PoolMetrics[]> {
     const {
@@ -126,6 +130,29 @@ export class MeteoraApi {
       pageSize = 100,
       includeUnknown = false,
     } = options;
+
+    try {
+      return await this.fetchPairsPaginated({ sortKey, orderBy, limit, pageSize, includeUnknown });
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404) {
+        logger.warn(
+          { baseUrl: this.baseUrl },
+          "/pair/all_with_pagination returned 404; falling back to /pair/all",
+        );
+        return this.fetchPairsUnpaginated({ sortKey, orderBy, limit });
+      }
+      throw error;
+    }
+  }
+
+  private async fetchPairsPaginated(options: {
+    sortKey: SortKey;
+    orderBy: "asc" | "desc";
+    limit: number;
+    pageSize: number;
+    includeUnknown: boolean;
+  }): Promise<PoolMetrics[]> {
+    const { sortKey, orderBy, limit, pageSize, includeUnknown } = options;
 
     const out: PoolMetrics[] = [];
     let skipped = 0;
@@ -165,11 +192,92 @@ export class MeteoraApi {
     return out;
   }
 
+  /**
+   * Fallback for when pagination is unavailable: `/pair/all` returns every
+   * pair in one unsorted array, so we normalise, rank and slice client-side.
+   */
+  private async fetchPairsUnpaginated(options: {
+    sortKey: SortKey;
+    orderBy: "asc" | "desc";
+    limit: number;
+  }): Promise<PoolMetrics[]> {
+    const { sortKey, orderBy, limit } = options;
+    const url = `${this.baseUrl}/pair/all`;
+    const body = await fetchJson<unknown>(url, { timeoutMs: 30_000 });
+
+    const rows = Array.isArray(body)
+      ? body
+      : Array.isArray((body as { pairs?: unknown })?.pairs)
+        ? (body as { pairs: unknown[] }).pairs
+        : undefined;
+    if (!rows) {
+      throw new Error(`Unexpected response from ${url}: expected an array of pairs`);
+    }
+
+    const pools: PoolMetrics[] = [];
+    let skipped = 0;
+    for (const row of rows) {
+      const parsedPair = parsePair(row);
+      if (parsedPair.ok) {
+        pools.push(parsedPair.pool);
+      } else {
+        skipped++;
+      }
+    }
+    if (skipped > 0) logger.debug({ skipped }, "pairs skipped during normalisation");
+
+    const sortValue = (p: PoolMetrics): number => {
+      switch (sortKey) {
+        case "tvl":
+          return p.tvlUsd;
+        case "volume":
+          return p.volume24hUsd;
+        case "lm":
+        case "feetvlratio":
+        default:
+          return p.feeTvlRatio24h;
+      }
+    };
+    const sign = orderBy === "asc" ? 1 : -1;
+    pools.sort((a, b) => sign * (sortValue(a) - sortValue(b)));
+
+    return pools.slice(0, limit);
+  }
+
   /** Fetch a single pair by pool address. */
   async fetchPair(address: string): Promise<PoolMetrics> {
     const url = `${this.baseUrl}/pair/${address}`;
-    const body = await fetchJson<unknown>(url, { timeoutMs: 20_000 });
+    let body: unknown;
+    try {
+      body = await fetchJson<unknown>(url, { timeoutMs: 20_000 });
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404) {
+        logger.warn({ baseUrl: this.baseUrl }, "/pair/:address returned 404; falling back to /pair/all");
+        return this.fetchPairFromAllListing(address);
+      }
+      throw error;
+    }
     const parsed = parsePair(body);
+    if (!parsed.ok) throw new Error(`Cannot evaluate pair ${address}: ${parsed.reason}`);
+    return parsed.pool;
+  }
+
+  private async fetchPairFromAllListing(address: string): Promise<PoolMetrics> {
+    const url = `${this.baseUrl}/pair/all`;
+    const body = await fetchJson<unknown>(url, { timeoutMs: 30_000 });
+    const rows = Array.isArray(body)
+      ? body
+      : Array.isArray((body as { pairs?: unknown })?.pairs)
+        ? (body as { pairs: unknown[] }).pairs
+        : undefined;
+    if (!rows) throw new Error(`Unexpected response from ${url}: expected an array of pairs`);
+
+    const row = rows.find(
+      (r) => typeof r === "object" && r !== null && (r as { address?: unknown }).address === address,
+    );
+    if (!row) throw new Error(`Cannot evaluate pair ${address}: not found in /pair/all`);
+
+    const parsed = parsePair(row);
     if (!parsed.ok) throw new Error(`Cannot evaluate pair ${address}: ${parsed.reason}`);
     return parsed.pool;
   }

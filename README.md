@@ -167,10 +167,20 @@ cp .env.example .env
 ```bash
 cd Meteora-Range-bot
 git pull
-npm install     # nur nötig, wenn neue Abhängigkeiten dazugekommen sind
+npm install
 ```
 
-`git clone` brauchst du nie wieder, außer du löschst den Ordner.
+`npm install` ist danach nur nötig, wenn `git pull` neue Abhängigkeiten
+mitgebracht hat — schadet aber auch sonst nicht. `git clone` brauchst du nie
+wieder, außer du löschst den Ordner.
+
+> **Vorsicht beim Copy-Paste von Befehlen aus einem Chat:** macOS' Standard-Shell
+> ist zsh, und zsh behandelt `#` in einer interaktiven Sitzung standardmäßig
+> **nicht** als Kommentarzeichen (anders als bash). Ein Befehl wie `npm test  #
+> 236 Tests` wird dann als `npm test` **mit den Wörtern nach dem `#` als
+> Argumenten** ausgeführt, was zu verwirrenden Fehlern führt. Kopiere nur die
+> reine Befehlszeile, ohne den Kommentar dahinter — alle Befehle in diesem
+> Dokument sind absichtlich ohne Inline-Kommentare geschrieben.
 
 **Node 20 reicht, Node 22 LTS ist besser.** Wer nicht gern im Terminal arbeitet:
 GitHub Desktop macht Klonen und Aktualisieren per Knopfdruck, der Rest läuft
@@ -253,11 +263,18 @@ irgendetwas Echtes passiert.
 ### Erste Schritte
 
 ```bash
-npm test                            # 232 Tests, kein Netz, keine Keys
-npm run scan                        # welche Pools gibt es? (ohne Keys)
-npm run backtest -- <pool-address>  # echte 90-Tage-Historie des Kandidaten
-npm run paper -- <pool-address>     # Live-Preise, simulierte Fills
+npm test
+npm run scan
+npm run backtest -- <pool-address>
+npm run paper -- <pool-address>
 ```
+
+| Befehl | Zweck |
+|--------|-------|
+| `npm test` | 240 Tests, kein Netz, keine Keys |
+| `npm run scan` | welche Pools gibt es? (ohne Keys) |
+| `npm run backtest -- <pool-address>` | echte 90-Tage-Historie des Kandidaten |
+| `npm run paper -- <pool-address>` | Live-Preise, simulierte Fills |
 
 `scan` liefert dir die Pool-Adressen für die anderen Befehle. Läuft der Scan ins
 Leere, sind die Filter zu streng — `MIN_FEE_TVL_RATIO_24H` und `MIN_TVL_USD`
@@ -275,17 +292,29 @@ close` räumt auf.
 ## 4. Benutzung
 
 ```bash
-npm run scan                        # Pools ranken
-npm run plan -- <pool-address>      # kompletter Plan, ohne zu traden
-npm run run  -- <pool-address>      # öffnen + Hedge nachführen
-npm run status                      # laufende Session
-npm run close                       # alles auflösen
+npm run scan
+npm run plan -- <pool-address>
+npm run run  -- <pool-address>
+npm run status
+npm run close
 
-npm run backtest -- <pool>          # echte Historie durchspielen
-npm run paper -- <pool>             # Live-Preise, simulierte Fills
-npm run simulate -- <pool>          # Monte Carlo über viele Preispfade
-npm run scenario -- <pool>          # "N Tage in Range, X% Fee-APR — was passiert?"
+npm run backtest -- <pool>
+npm run paper -- <pool>
+npm run simulate -- <pool>
+npm run scenario -- <pool>
 ```
+
+| Befehl | Zweck |
+|--------|-------|
+| `npm run scan` | Pools ranken |
+| `npm run plan -- <pool-address>` | kompletter Plan, ohne zu traden |
+| `npm run run -- <pool-address>` | öffnen + Hedge nachführen |
+| `npm run status` | laufende Session |
+| `npm run close` | alles auflösen |
+| `npm run backtest -- <pool>` | echte Historie durchspielen |
+| `npm run paper -- <pool>` | Live-Preise, simulierte Fills |
+| `npm run simulate -- <pool>` | Monte Carlo über viele Preispfade |
+| `npm run scenario -- <pool>` | "N Tage in Range, X% Fee-APR — was passiert?" |
 
 `scan` ohne Argument, dann `plan`, dann `run` ist der normale Weg. `run` ohne
 Pool-Adresse nimmt automatisch den besten Scan-Treffer.
@@ -708,12 +737,19 @@ skaliert die Fee-Rate linear mit der Liquiditätsdichte
 ab, wie die *übrige* Pool-Liquidität verteilt ist — das weiß der Bot nicht. Die
 Rangfolge in der Tabelle ist belastbarer als die absoluten Zahlen.
 
-**Nicht live gegen die Mainnet-APIs getestet.** Die Entwicklungsumgebung hatte keinen
+**Nicht live gegen die Mainnet-APIs entwickelt.** Die Entwicklungsumgebung hatte keinen
 Netzwerkzugang zu `dlmm-api.meteora.ag` und `api.hyperliquid.xyz`. Alle SDK-Aufrufe
 sind gegen die installierten Typdefinitionen von `@meteora-ag/dlmm@1.9.14` und
 `@nktkas/hyperliquid@0.33.2` geschrieben und typgeprüft, und die gesamte Logik ist
-offline durchgetestet (232 Tests) — aber **fahre zuerst `npm run paper`**, dann
+offline durchgetestet (240 Tests) — aber **fahre zuerst `npm run paper`**, dann
 `DRY_RUN=true`, dann einen kleinen Betrag.
+
+Ein konkretes Beispiel dafür: `/pair/all_with_pagination` — der dokumentierte
+Meteora-Endpoint für die Pool-Liste — antwortete beim ersten echten Lauf mit
+404. `MeteoraApi` fängt das jetzt ab und fällt automatisch auf den einfacheren
+`/pair/all`-Endpunkt zurück (Ranking und Limit dann clientseitig), siehe
+[`src/meteora/api.ts`](src/meteora/api.ts). Sollte auch dieser Endpunkt sich
+mal ändern, ist die Fehlermeldung wenigstens eindeutig — Fehler bitte melden.
 
 ---
 
@@ -752,7 +788,7 @@ src/
     scenario.ts          Was-wäre-wenn: Aufhebung und Kosten nebeneinander
   paper/venues.ts        Live-Daten + simulierte Ausführung
   util/                  HTTP mit Retries, Balance-Prüfung
-test/                    232 Offline-Tests
+test/                    240 Offline-Tests
 ```
 
 ### Zur `meteora/sdk.ts`-Datei
@@ -770,10 +806,16 @@ test/                    232 Offline-Tests
 ## 10. Entwicklung
 
 ```bash
-npm test          # 232 Offline-Tests, kein Netzwerk nötig
-npm run typecheck # tsc --noEmit
-npm run build     # -> dist/
+npm test
+npm run typecheck
+npm run build
 ```
+
+| Befehl | Zweck |
+|--------|-------|
+| `npm test` | 240 Offline-Tests, kein Netzwerk nötig |
+| `npm run typecheck` | `tsc --noEmit` |
+| `npm run build` | kompiliert nach `dist/` |
 
 Abgedeckt: die Mathematik (Delta, Liquidation, Leverage-Solve, Rebalancing-
 Vorzeichen), die Bin-Geometrie, der komplette Selektions- und Planungspfad, die
